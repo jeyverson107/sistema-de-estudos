@@ -56,10 +56,25 @@ def init_db():
                     fim_timestamp REAL,
                     segundos_pausados INTEGER
                 )''')
+    
+    # Auto-correção para "portugês" -> "Português" no banco
+    c.execute("UPDATE materias SET nome = REPLACE(nome, 'portugês', 'português') WHERE nome LIKE '%portugês%'")
+    c.execute("UPDATE materias SET nome = REPLACE(nome, 'Portugês', 'Português') WHERE nome LIKE '%Portugês%'")
+    c.execute("UPDATE materias SET nome = REPLACE(nome, 'PORTUGÊS', 'PORTUGUÊS') WHERE nome LIKE '%PORTUGÊS%'")
+    
     conn.commit()
     conn.close()
 
 init_db()
+
+def normalizar_nome_materia(nome):
+    if not nome:
+        return nome
+    nome_corrigido = str(nome).strip()
+    nome_corrigido = nome_corrigido.replace('portugês', 'português')
+    nome_corrigido = nome_corrigido.replace('Portugês', 'Português')
+    nome_corrigido = nome_corrigido.replace('PORTUGÊS', 'PORTUGUÊS')
+    return nome_corrigido
 
 # -----------------------------------------------------------------------------
 # CRONÔMETRO
@@ -210,7 +225,7 @@ if menu == "📅 Meta & Rotina do Dia":
         df_metas = pd.read_sql_query("SELECT id, nome FROM metas WHERE ativa = 1", conn)
         
         if df_metas.empty:
-            st.warning("Nenhum objetivo cadastrado. Cadastre um em '⚙️ Gerenciador'.")
+            st.warning("Nenum objetivo cadastrado. Cadastre um em '⚙️ Gerenciador'.")
         else:
             meta_sel_rotina = st.selectbox("Selecione o Objetivo do Dia:", df_metas['nome'].tolist())
             meta_id_rotina = df_metas[df_metas['nome'] == meta_sel_rotina]['id'].values[0]
@@ -311,7 +326,7 @@ if menu == "📅 Meta & Rotina do Dia":
                                 st.rerun()
 
 # =============================================================================
-# MENU 2: CHECKLIST & ACOMPANHAMENTO (COM SINCRONIZAÇÃO AUTOMÁTICA)
+# MENU 2: CHECKLIST & ACOMPANHAMENTO
 # =============================================================================
 elif menu == "📋 Checklist & Acompanhamento":
     st.header("📋 Checklist de Conteúdos por Matéria")
@@ -374,7 +389,6 @@ elif menu == "📋 Checklist & Acompanhamento":
                         is_resumo = 1 if row['Resumo_Mapa'] else 0
                         status_str = row['Status']
                         
-                        # --- SINCRONIZAÇÃO AUTOMÁTICA DE STATUS E CHECKBOXES ---
                         if is_teoria == 1 and status_str == 'Pendente':
                             status_str = 'Concluído'
                         elif status_str == 'Concluído':
@@ -437,7 +451,7 @@ elif menu == "📝 Registrar Questões":
                         st.rerun()
 
 # =============================================================================
-# MENU 4: DASHBOARD DE EVOLUÇÃO (CÁLCULO DE AVANÇO DE EDITAL CORRIGIDO)
+# MENU 4: DASHBOARD DE EVOLUÇÃO
 # =============================================================================
 elif menu == "📊 Dashboard de Evolução":
     st.header("📊 Dashboard Geral de Desempenho")
@@ -459,24 +473,19 @@ elif menu == "📊 Dashboard de Evolução":
                 else:
                     niveis_lista = []
                     
-                    # Cálculo global do objetivo
                     q_top = "SELECT t.status, t.teoria FROM topicos t JOIN materias m ON t.materia_id = m.id WHERE m.meta_id = ?"
                     df_top_meta = pd.read_sql_query(q_top, conn, params=(int(m_id),))
                     
                     total_t = len(df_top_meta)
-                    
-                    # Tópico é considerado concluído se status == 'Concluído' OU se a Teoria foi assinalada
                     conc_t = len(df_top_meta[(df_top_meta['status'] == 'Concluído') | (df_top_meta['teoria'] == 1)])
                     parc_t = len(df_top_meta[(df_top_meta['status'] == 'Parcial') & (df_top_meta['teoria'] == 0)])
                     
-                    # Pontuação ponderada: Concluído = 1.0, Parcial = 0.5
                     pontos_progresso = conc_t + (parc_t * 0.5)
                     pct = (pontos_progresso / total_t * 100) if total_t > 0 else 0
                     
                     for _, r_mat in df_mats.iterrows():
                         nv = calcular_nivel_materia(r_mat['id'], conn)
                         
-                        # Detalhamento por matéria
                         df_tm = pd.read_sql_query("SELECT status, teoria FROM topicos WHERE materia_id = ?", conn, params=(int(r_mat['id']),))
                         t_mat_total = len(df_tm)
                         t_mat_conc = len(df_tm[(df_tm['status'] == 'Concluído') | (df_tm['teoria'] == 1)])
@@ -501,7 +510,7 @@ elif menu == "📊 Dashboard de Evolução":
                     st.dataframe(df_niv, use_container_width=True, hide_index=True)
 
 # =============================================================================
-# MENU 5: GERENCIADOR & CONFIGURAÇÕES & GERENCIADOR DE EXCLUSÃO
+# MENU 5: GERENCIADOR & IMPORTADOR EXCEL
 # =============================================================================
 elif menu == "⚙️ Gerenciador & Importador Excel":
     st.header("⚙️ Gerenciador do Sistema")
@@ -559,10 +568,11 @@ elif menu == "⚙️ Gerenciador & Importador Excel":
                 n_materia = st.text_input("Nome da Matéria (Ex: Direito Administrativo)")
                 if st.form_submit_button("Adicionar Matéria"):
                     if n_materia.strip() != "":
+                        m_corrigida = normalizar_nome_materia(n_materia)
                         c = conn.cursor()
-                        c.execute("INSERT INTO materias (meta_id, nome) VALUES (?, ?)", (int(m_id_sel), n_materia.strip()))
+                        c.execute("INSERT INTO materias (meta_id, nome) VALUES (?, ?)", (int(m_id_sel), m_corrigida))
                         conn.commit()
-                        st.success(f"Matéria '{n_materia}' adicionada!")
+                        st.success(f"Matéria '{m_corrigida}' adicionada!")
                         st.rerun()
 
     with t3:
@@ -619,9 +629,9 @@ elif menu == "⚙️ Gerenciador & Importador Excel":
                                 continue
                             
                             df_sheet = pd.read_excel(uploaded_file, sheet_name=sheet)
-                            mat_nome = sheet.strip().upper()
+                            mat_nome = normalizar_nome_materia(sheet.strip().upper())
                             
-                            c.execute("SELECT id FROM materias WHERE meta_id = ? AND UPPER(nome) = ?", (int(meta_excel_id), mat_nome))
+                            c.execute("SELECT id FROM materias WHERE meta_id = ? AND UPPER(nome) = ?", (int(meta_excel_id), mat_nome.upper()))
                             res_mat = c.fetchone()
                             if res_mat:
                                 mat_id = res_mat[0]
@@ -639,7 +649,7 @@ elif menu == "⚙️ Gerenciador & Importador Excel":
                                 total_t_count += 1
                         
                         conn.commit()
-                        st.success(f"🎉 Importação concluída! {total_m_count} matérias e {total_t_count} tópicos salvos.")
+                        st.success(f"🎉 Importação concluída! {total_m_count} matérias e {total_t_count} tópicos salvos com nomes corrigidos.")
                         st.rerun()
                 except Exception as e:
                     st.error(f"Erro ao processar a planilha: {e}")

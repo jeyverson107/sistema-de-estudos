@@ -7,7 +7,7 @@ import time
 st.set_page_config(page_title="Sistema de Estudos & Carreira", layout="wide", page_icon="🛡️")
 
 # -----------------------------------------------------------------------------
-# BANCO DE DADOS DINÂMICO (SQLite com Suporte a Exclusão em Cascata)
+# BANCO DE DADOS DINÂMICO
 # -----------------------------------------------------------------------------
 def get_db():
     conn = sqlite3.connect("estudos_master.db")
@@ -62,7 +62,7 @@ def init_db():
 init_db()
 
 # -----------------------------------------------------------------------------
-# LÓGICA DO CRONÔMETRO RESILIENTE (TIMESTAMP REAL)
+# CRONÔMETRO
 # -----------------------------------------------------------------------------
 def get_timer_state(topico_id, duracao_padrao_segundos):
     conn = get_db()
@@ -119,18 +119,18 @@ def set_timer_stop(topico_id):
     conn.close()
 
 # -----------------------------------------------------------------------------
-# ALGORITMO DE CÁLCULO DE NÍVEL DE DOMÍNIO
+# CÁLCULO DE NÍVEL DE DOMÍNIO
 # -----------------------------------------------------------------------------
 def calcular_nivel_materia(materia_id, conn):
-    query_topicos = "SELECT status FROM topicos WHERE materia_id = ?"
+    query_topicos = "SELECT status, teoria FROM topicos WHERE materia_id = ?"
     df_topicos = pd.read_sql_query(query_topicos, conn, params=(int(materia_id),))
     
     if df_topicos.empty:
         return 5.0
         
     total_topicos = len(df_topicos)
-    concluidos = len(df_topicos[df_topicos['status'] == 'Concluído'])
-    parciais = len(df_topicos[df_topicos['status'] == 'Parcial'])
+    concluidos = len(df_topicos[(df_topicos['status'] == 'Concluído') | (df_topicos['teoria'] == 1)])
+    parciais = len(df_topicos[(df_topicos['status'] == 'Parcial') & (df_topicos['teoria'] == 0)])
     
     pct_teoria = ((concluidos + (0.5 * parciais)) / total_topicos) * 10.0
     
@@ -216,10 +216,10 @@ if menu == "📅 Meta & Rotina do Dia":
             meta_id_rotina = df_metas[df_metas['nome'] == meta_sel_rotina]['id'].values[0]
             
             query_proximos = """
-                SELECT t.id as topico_id, t.nome as topico_nome, m.id as materia_id, m.nome as materia_nome, t.status
+                SELECT t.id as topico_id, t.nome as topico_nome, m.id as materia_id, m.nome as materia_nome, t.status, t.teoria
                 FROM topicos t
                 JOIN materias m ON t.materia_id = m.id
-                WHERE m.meta_id = ? AND t.status != 'Concluído'
+                WHERE m.meta_id = ? AND t.status != 'Concluído' AND t.teoria = 0
                 ORDER BY m.id, t.id
             """
             df_proximos = pd.read_sql_query(query_proximos, conn, params=(int(meta_id_rotina),))
@@ -296,7 +296,7 @@ if menu == "📅 Meta & Rotina do Dia":
                         with col_a:
                             if st.button(f"✅ Concluído Totalmente", key=f"conc_{topico_id}"):
                                 c = conn.cursor()
-                                c.execute("UPDATE topicos SET status = 'Concluído', teoria = 1 WHERE id = ?", (int(topico_id),))
+                                c.execute("UPDATE topicos SET status = 'Concluído', teoria = 1, resumo = 1 WHERE id = ?", (int(topico_id),))
                                 conn.commit()
                                 set_timer_stop(topico_id)
                                 st.success("Tópico Concluído!")
@@ -304,14 +304,14 @@ if menu == "📅 Meta & Rotina do Dia":
                         with col_b:
                             if st.button(f"⏳ Parcialmente Estudado", key=f"parc_{topico_id}"):
                                 c = conn.cursor()
-                                c.execute("UPDATE topicos SET status = 'Parcial' WHERE id = ?", (int(topico_id),))
+                                c.execute("UPDATE topicos SET status = 'Parcial', teoria = 1 WHERE id = ?", (int(topico_id),))
                                 conn.commit()
                                 set_timer_stop(topico_id)
                                 st.info("Marcado como Parcial.")
                                 st.rerun()
 
 # =============================================================================
-# MENU 2: CHECKLIST & ACOMPANHAMENTO
+# MENU 2: CHECKLIST & ACOMPANHAMENTO (COM SINCRONIZAÇÃO AUTOMÁTICA)
 # =============================================================================
 elif menu == "📋 Checklist & Acompanhamento":
     st.header("📋 Checklist de Conteúdos por Matéria")
@@ -370,18 +370,27 @@ elif menu == "📋 Checklist & Acompanhamento":
                 if st.button("💾 Salvar Alterações na Matéria"):
                     c = conn.cursor()
                     for idx, row in edited_df.iterrows():
+                        is_teoria = 1 if row['Videoaula_PDF'] else 0
+                        is_resumo = 1 if row['Resumo_Mapa'] else 0
+                        status_str = row['Status']
+                        
+                        # --- SINCRONIZAÇÃO AUTOMÁTICA DE STATUS E CHECKBOXES ---
+                        if is_teoria == 1 and status_str == 'Pendente':
+                            status_str = 'Concluído'
+                        elif status_str == 'Concluído':
+                            is_teoria = 1
+                            if is_resumo == 0:
+                                is_resumo = 1
+                        elif status_str == 'Parcial':
+                            is_teoria = 1
+
                         c.execute("""
                             UPDATE topicos 
                             SET teoria = ?, resumo = ?, status = ? 
                             WHERE id = ?
-                        """, (
-                            1 if row['Videoaula_PDF'] else 0,
-                            1 if row['Resumo_Mapa'] else 0,
-                            row['Status'],
-                            int(row['id'])
-                        ))
+                        """, (is_teoria, is_resumo, status_str, int(row['id'])))
                     conn.commit()
-                    st.success("Progresso salvo com sucesso!")
+                    st.success("Progresso salvo e sincronizado com o Dashboard de Evolução!")
                     st.rerun()
 
 # =============================================================================
@@ -428,7 +437,7 @@ elif menu == "📝 Registrar Questões":
                         st.rerun()
 
 # =============================================================================
-# MENU 4: DASHBOARD DE EVOLUÇÃO
+# MENU 4: DASHBOARD DE EVOLUÇÃO (CÁLCULO DE AVANÇO DE EDITAL CORRIGIDO)
 # =============================================================================
 elif menu == "📊 Dashboard de Evolução":
     st.header("📊 Dashboard Geral de Desempenho")
@@ -449,25 +458,46 @@ elif menu == "📊 Dashboard de Evolução":
                     st.info("Sem matérias cadastradas.")
                 else:
                     niveis_lista = []
+                    
+                    # Cálculo global do objetivo
+                    q_top = "SELECT t.status, t.teoria FROM topicos t JOIN materias m ON t.materia_id = m.id WHERE m.meta_id = ?"
+                    df_top_meta = pd.read_sql_query(q_top, conn, params=(int(m_id),))
+                    
+                    total_t = len(df_top_meta)
+                    
+                    # Tópico é considerado concluído se status == 'Concluído' OU se a Teoria foi assinalada
+                    conc_t = len(df_top_meta[(df_top_meta['status'] == 'Concluído') | (df_top_meta['teoria'] == 1)])
+                    parc_t = len(df_top_meta[(df_top_meta['status'] == 'Parcial') & (df_top_meta['teoria'] == 0)])
+                    
+                    # Pontuação ponderada: Concluído = 1.0, Parcial = 0.5
+                    pontos_progresso = conc_t + (parc_t * 0.5)
+                    pct = (pontos_progresso / total_t * 100) if total_t > 0 else 0
+                    
                     for _, r_mat in df_mats.iterrows():
                         nv = calcular_nivel_materia(r_mat['id'], conn)
-                        niveis_lista.append({"Matéria": r_mat['nome'], "Nível Domínio": nv})
+                        
+                        # Detalhamento por matéria
+                        df_tm = pd.read_sql_query("SELECT status, teoria FROM topicos WHERE materia_id = ?", conn, params=(int(r_mat['id']),))
+                        t_mat_total = len(df_tm)
+                        t_mat_conc = len(df_tm[(df_tm['status'] == 'Concluído') | (df_tm['teoria'] == 1)])
+                        pct_mat = (t_mat_conc / t_mat_total * 100) if t_mat_total > 0 else 0
+                        
+                        niveis_lista.append({
+                            "Matéria": r_mat['nome'], 
+                            "Tópicos Concluídos": f"{t_mat_conc}/{t_mat_total}",
+                            "Avanço (%)": f"{pct_mat:.1f}%",
+                            "Nível Domínio": nv
+                        })
                     
                     df_niv = pd.DataFrame(niveis_lista)
                     media_geral = df_niv['Nível Domínio'].mean()
                     
-                    q_top = "SELECT t.status FROM topicos t JOIN materias m ON t.materia_id = m.id WHERE m.meta_id = ?"
-                    df_top_meta = pd.read_sql_query(q_top, conn, params=(int(m_id),))
-                    total_t = len(df_top_meta)
-                    conc_t = len(df_top_meta[df_top_meta['status'] == 'Concluído'])
-                    pct = (conc_t / total_t * 100) if total_t > 0 else 0
-                    
                     col_x, col_y, col_z = st.columns(3)
-                    col_x.metric("Avanço do Edital", f"{pct:.1f}%", f"{conc_t}/{total_t} concluídos")
+                    col_x.metric("Avanço do Edital", f"{pct:.1f}%", f"{conc_t}/{total_t} tópicos")
                     col_y.metric("Domínio Médio Geral", f"{media_geral:.1f} / 10")
-                    col_z.progress(pct / 100)
+                    col_z.progress(min(1.0, pct / 100))
                     
-                    st.subheader("🎯 Nível de Domínio Calculado por Matéria")
+                    st.subheader("🎯 Nível de Domínio e Avanço por Matéria")
                     st.dataframe(df_niv, use_container_width=True, hide_index=True)
 
 # =============================================================================
@@ -614,7 +644,6 @@ elif menu == "⚙️ Gerenciador & Importador Excel":
                 except Exception as e:
                     st.error(f"Erro ao processar a planilha: {e}")
 
-    # --- ABA DE GERENCIAMENTO E EXCLUSÃO DE DADOS ---
     with t5:
         st.subheader("🗑️ Gerenciar e Excluir Dados Importados")
         st.write("Use esta opção caso tenha importado um arquivo errado ou queira refazer a carga de dados.")

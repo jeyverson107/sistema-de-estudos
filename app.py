@@ -8,7 +8,7 @@ import os
 st.set_page_config(page_title="Sistema de Estudos & Carreira", layout="wide", page_icon="🛡️")
 
 # -----------------------------------------------------------------------------
-# BANCO DE DADOS DINÂMICO (COM GERAÇÃO DE CAMINHO ABSOLUTO FIXO)
+# BANCO DE DADOS DINÂMICO (CAMINHO ABSOLUTO FIXO)
 # -----------------------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "estudos_master.db")
@@ -229,7 +229,7 @@ if menu == "📅 Meta & Rotina do Dia":
         df_metas = pd.read_sql_query("SELECT id, nome FROM metas WHERE ativa = 1", conn)
         
         if df_metas.empty:
-            st.warning("Nenhum objetivo cadastrado. Cadastre um em '⚙️ Gerenciador'.")
+            st.warning("Nenum objetivo cadastrado. Cadastre um em '⚙️ Gerenciador'.")
         else:
             meta_sel_rotina = st.selectbox("Selecione o Objetivo do Dia:", df_metas['nome'].tolist())
             meta_id_rotina = df_metas[df_metas['nome'] == meta_sel_rotina]['id'].values[0]
@@ -645,15 +645,20 @@ elif menu == "⚙️ Gerenciador & Importador Excel":
                                 total_m_count += 1
                             
                             for idx, row in df_sheet.iterrows():
-                                if idx == 0 or pd.isna(row.iloc[2]): 
+                                if pd.isna(row.iloc[2]): 
                                     continue
                                 
                                 topico_desc = str(row.iloc[2]).strip()
+                                
+                                # Ignora textos irrelevantes, cabeçalhos ou zeros que venham do Excel
+                                if topico_desc in ["0", "0.0", "", "None", "nan", "Tópicos", "Conteúdo"]:
+                                    continue
+                                
                                 c.execute("INSERT INTO topicos (materia_id, nome) VALUES (?, ?)", (int(mat_id), topico_desc))
                                 total_t_count += 1
                         
                         conn.commit()
-                        st.success(f"🎉 Importação concluída! {total_m_count} matérias e {total_t_count} tópicos salvos com nomes corrigidos.")
+                        st.success(f"🎉 Importação concluída! {total_m_count} matérias e {total_t_count} tópicos salvos com sucesso.")
                         st.rerun()
                 except Exception as e:
                     st.error(f"Erro ao processar a planilha: {e}")

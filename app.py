@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import datetime
 import sqlite3
+import time
 
 st.set_page_config(page_title="Sistema de Estudos & Carreira", layout="wide", page_icon="🛡️")
 
@@ -34,7 +35,7 @@ def init_db():
                     nome TEXT,
                     teoria INTEGER DEFAULT 0,
                     resumo INTEGER DEFAULT 0,
-                    status TEXT DEFAULT 'Pendente', -- 'Pendente', 'Parcial', 'Concluído'
+                    status TEXT DEFAULT 'Pendente',
                     FOREIGN KEY(materia_id) REFERENCES materias(id) ON DELETE CASCADE
                 )''')
     c.execute('''CREATE TABLE IF NOT EXISTS exercicios (
@@ -58,11 +59,6 @@ init_db()
 # ALGORITMO DE CÁLCULO DE NÍVEL DE DOMÍNIO
 # -----------------------------------------------------------------------------
 def calcular_nivel_materia(materia_id, conn):
-    """
-    Calcula dinamicamente o nível de domínio (0 a 10) combinando:
-    1. Avanço de Teoria/Checklist (0 a 10)
-    2. Taxa de Acerto nas Questões (0 a 10)
-    """
     query_topicos = "SELECT status FROM topicos WHERE materia_id = ?"
     df_topicos = pd.read_sql_query(query_topicos, conn, params=(int(materia_id),))
     
@@ -73,10 +69,8 @@ def calcular_nivel_materia(materia_id, conn):
     concluidos = len(df_topicos[df_topicos['status'] == 'Concluído'])
     parciais = len(df_topicos[df_topicos['status'] == 'Parcial'])
     
-    # Progresso teórico: Concluído vale 1.0, Parcial vale 0.5
     pct_teoria = ((concluidos + (0.5 * parciais)) / total_topicos) * 10.0
     
-    # Consultar questões resolvidas nesta matéria
     query_ex = """
         SELECT e.acertos, e.erros 
         FROM exercicios e
@@ -98,14 +92,12 @@ def calcular_nivel_materia(materia_id, conn):
     taxa_acerto = total_acertos / total_q
     score_pratica = taxa_acerto * 10.0
     
-    # O peso das questões cresce progressivamente até 30 questões (máximo 60% do peso total)
     peso_questoes = min(1.0, total_q / 30.0) * 0.6
     peso_teoria = 1.0 - peso_questoes
     
     nivel_calculado = (pct_teoria * peso_teoria) + (score_pratica * peso_questoes)
     return round(nivel_calculado, 1)
 
-# Auxiliares de Configuração
 def get_config(chave, valor_padrao):
     conn = get_db()
     c = conn.cursor()
@@ -137,7 +129,7 @@ menu = st.sidebar.radio("Navegação", [
 conn = get_db()
 
 # =============================================================================
-# MENU 1: META & ROTINA DO DIA (COM TEMPO ADAPTATIVO POR DOMÍNIO)
+# MENU 1: META & ROTINA DO DIA (COM CRONÔMETRO INTEGRADO)
 # =============================================================================
 if menu == "📅 Meta & Rotina do Dia":
     st.header("🎯 Sugestão Diária de Estudo e Rotina Policial")
@@ -145,7 +137,7 @@ if menu == "📅 Meta & Rotina do Dia":
     escalado = st.checkbox("🚨 Estarei Escalado Hoje / Plantão Extra (Suspender estudos hoje)", value=False)
     
     if escalado:
-        st.warning("⚠️ **Modo Plantão/Escala Ativado:** O ciclo de estudos foi pausado para hoje. Bons serviços no plantão! O ciclo será retomado do exato ponto onde você parou assim que estiver livre.")
+        st.warning("⚠️ **Modo Plantão/Escala Ativado:** O ciclo de estudos foi pausado para hoje. Bons serviços no plantão!")
     else:
         horas_disp = float(get_config("horas_estudo_dia", "3.0"))
         turno_pref = get_config("turno_estudo", "Noite")
@@ -160,7 +152,6 @@ if menu == "📅 Meta & Rotina do Dia":
             meta_sel_rotina = st.selectbox("Selecione o Objetivo do Dia:", df_metas['nome'].tolist())
             meta_id_rotina = df_metas[df_metas['nome'] == meta_sel_rotina]['id'].values[0]
             
-            # Buscar próximos tópicos pendentes/parciais por matéria
             query_proximos = """
                 SELECT t.id as topico_id, t.nome as topico_nome, m.id as materia_id, m.nome as materia_nome, t.status
                 FROM topicos t
@@ -176,45 +167,101 @@ if menu == "📅 Meta & Rotina do Dia":
             else:
                 topicos_sugeridos = df_proximos.groupby('materia_nome').first().reset_index().head(2)
                 
-                # Calcular níveis dinâmicos e pesos das matérias selecionadas
                 niveis = []
                 pesos = []
                 for idx, row in topicos_sugeridos.iterrows():
                     nv = calcular_nivel_materia(row['materia_id'], conn)
                     niveis.append(nv)
-                    # Quanto menor o nível, maior o peso
                     pesos.append(max(1.0, 11.0 - nv))
                 
                 soma_pesos = sum(pesos)
                 
-                st.subheader("📌 Recomendações Adaptativas para Hoje:")
+                st.subheader("📌 Recomendações e Cronômetro de Estudo:")
                 
                 for i, (_, row) in enumerate(topicos_sugeridos.iterrows()):
-                    # Distribuição proporcional das horas com base no peso de domínio
                     prop_tempo = pesos[i] / soma_pesos
-                    tempo_calc = round(horas_disp * prop_tempo, 1)
-                    horas_f = int(tempo_calc)
-                    minutos_f = int(round((tempo_calc - horas_f) * 60))
+                    tempo_horas = horas_disp * prop_tempo
+                    total_segundos = int(tempo_horas * 3600)
+                    
+                    horas_f = int(tempo_horas)
+                    minutos_f = int(round((tempo_horas - horas_f) * 60))
                     tempo_str = f"{horas_f}h{minutos_f:02d}m" if horas_f > 0 else f"{minutos_f} min"
                     
-                    with st.expander(f"📖 **{row['materia_nome']}** | Tempo Adaptativo: **{tempo_str}** | Domínio Automático: `{niveis[i]}/10`", expanded=True):
-                        st.markdown(f"**Conteúdo Específico a Estudar:** {row['topico_nome']}")
+                    topico_key = f"timer_{row['topico_id']}"
+                    
+                    # Inicialização do estado do cronômetro para cada tópico
+                    if f"{topico_key}_restante" not in st.session_state:
+                        st.session_state[f"{topico_key}_restante"] = total_segundos
+                    if f"{topico_key}_ativo" not in st.session_state:
+                        st.session_state[f"{topico_key}_ativo"] = False
+
+                    with st.expander(f"📖 **{row['materia_nome']}** | Tempo Adaptativo: **{tempo_str}** | Domínio: `{niveis[i]}/10`", expanded=True):
+                        st.markdown(f"**Conteúdo Específico:** {row['topico_nome']}")
                         st.write(f"**Status Atual:** `{row['status']}`")
                         
+                        # --- Bloco do Cronômetro ---
+                        st.markdown("---")
+                        st.markdown("#### ⏱️ Cronômetro de Estudo")
+                        
+                        seg_restantes = st.session_state[f"{topico_key}_restante"]
+                        hrs_c = seg_restantes // 3600
+                        mins_c = (seg_restantes % 3600) // 60
+                        secs_c = seg_restantes % 60
+                        
+                        timer_display = st.empty()
+                        timer_display.markdown(f"### ⏳ `{hrs_c:02d}:{mins_c:02d}:{secs_c:02d}`")
+                        
+                        c1, c2, c3 = st.columns(3)
+                        with c1:
+                            if st.button("▶️ Iniciar / Continuar", key=f"start_{row['topico_id']}"):
+                                st.session_state[f"{topico_key}_ativo"] = True
+                        with c2:
+                            if st.button("⏸️ Pausar", key=f"pause_{row['topico_id']}"):
+                                st.session_state[f"{topico_key}_ativo"] = False
+                        with c3:
+                            if st.button("🔄 Reiniciar Tempo", key=f"reset_{row['topico_id']}"):
+                                st.session_state[f"{topico_key}_ativo"] = False
+                                st.session_state[f"{topico_key}_restante"] = total_segundos
+                                st.rerun()
+
+                        # Loop do Cronômetro em Tempo Real
+                        if st.session_state[f"{topico_key}_ativo"]:
+                            while st.session_state[f"{topico_key}_restante"] > 0 and st.session_state[f"{topico_key}_ativo"]:
+                                time.sleep(1)
+                                st.session_state[f"{topico_key}_restante"] -= 1
+                                r_seg = st.session_state[f"{topico_key}_restante"]
+                                r_h = r_seg // 3600
+                                r_m = (r_seg % 3600) // 60
+                                r_s = r_seg % 60
+                                timer_display.markdown(f"### ⏳ `{r_h:02d}:{r_m:02d}:{r_s:02d}`")
+                                
+                                if st.session_state[f"{topico_key}_restante"] == 0:
+                                    st.session_state[f"{topico_key}_ativo"] = False
+                                    st.balloons()
+                                    st.success("🔔 **Tempo encerrado!** Ótimo trabalho de estudo!")
+                                    st.rerun()
+
+                        st.markdown("---")
+                        
+                        # --- Finalização da Matéria ---
                         col_a, col_b = st.columns(2)
                         with col_a:
                             if st.button(f"✅ Concluído Totalmente", key=f"conc_{row['topico_id']}"):
                                 c = conn.cursor()
                                 c.execute("UPDATE topicos SET status = 'Concluído', teoria = 1 WHERE id = ?", (int(row['topico_id']),))
                                 conn.commit()
-                                st.success("Tópico Concluído! O sistema recalculou seu nível e atualizou o ciclo.")
+                                st.session_state[f"{topico_key}_restante"] = total_segundos
+                                st.session_state[f"{topico_key}_ativo"] = False
+                                st.success("Tópico Concluído!")
                                 st.rerun()
                         with col_b:
                             if st.button(f"⏳ Parcialmente Estudado", key=f"parc_{row['topico_id']}"):
                                 c = conn.cursor()
                                 c.execute("UPDATE topicos SET status = 'Parcial' WHERE id = ?", (int(row['topico_id']),))
                                 conn.commit()
-                                st.info("Marcado como Parcial. Ele reaparecerá no próximo ciclo para finalização.")
+                                st.session_state[f"{topico_key}_restante"] = total_segundos
+                                st.session_state[f"{topico_key}_ativo"] = False
+                                st.info("Marcado como Parcial.")
                                 st.rerun()
 
 # =============================================================================
@@ -242,9 +289,8 @@ elif menu == "📋 Checklist & Acompanhamento":
                 mat_sel = st.selectbox("2. Filtrar por Matéria", df_mat['nome'].tolist())
                 mat_id = df_mat[df_mat['nome'] == mat_sel]['id'].values[0]
             
-            # Exibir o nível recalculado automaticamente
             nivel_atual = calcular_nivel_materia(mat_id, conn)
-            st.info(f"📊 **Nível de Domínio Calculado em {mat_sel}:** `{nivel_atual} / 10.0` (Baseado no progresso + taxa de acerto em questões)")
+            st.info(f"📊 **Nível de Domínio Calculado em {mat_sel}:** `{nivel_atual} / 10.0`")
             
             query = """
                 SELECT id, nome as Topico, teoria as Videoaula_PDF, resumo as Resumo_Mapa, status as Status
@@ -293,7 +339,7 @@ elif menu == "📋 Checklist & Acompanhamento":
                     st.rerun()
 
 # =============================================================================
-# MENU 3: REGISTRAR QUESTÕES (ALIMENTA O NÍVEL AUTOMÁTICO)
+# MENU 3: REGISTRAR QUESTÕES
 # =============================================================================
 elif menu == "📝 Registrar Questões":
     st.header("📝 Registro de Desempenho em Exercícios")
@@ -332,7 +378,7 @@ elif menu == "📝 Registrar Questões":
                         c.execute("INSERT INTO exercicios (data, topico_id, acertos, erros) VALUES (?, ?, ?, ?)",
                                   (datetime.date.today().strftime('%Y-%m-%d'), int(topico_id), acertos, erros))
                         conn.commit()
-                        st.success("Exercícios registrados! O Nível de Domínio da matéria foi recalculado.")
+                        st.success("Exercícios registrados com sucesso!")
                         st.rerun()
 
 # =============================================================================
@@ -351,7 +397,6 @@ elif menu == "📊 Dashboard de Evolução":
         for idx, row_meta in df_metas.iterrows():
             with tabs[idx]:
                 m_id = row_meta['id']
-                
                 df_mats = pd.read_sql_query("SELECT id, nome FROM materias WHERE meta_id = ?", conn, params=(int(m_id),))
                 
                 if df_mats.empty:

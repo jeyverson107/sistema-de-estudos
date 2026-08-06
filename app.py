@@ -50,6 +50,12 @@ def init_db():
                     chave TEXT PRIMARY KEY,
                     valor TEXT
                 )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS cronometro_sessao (
+                    topico_id INTEGER PRIMARY KEY,
+                    segundos_restantes INTEGER,
+                    status TEXT, -- 'RODANDO', 'PAUSADO'
+                    ultima_atualizacao REAL
+                )''')
     conn.commit()
     conn.close()
 
@@ -113,6 +119,39 @@ def set_config(chave, valor):
     conn.commit()
     conn.close()
 
+# Funções do Cronômetro Persistente
+def salvar_sessao_cronometro(topico_id, segundos, status_timer):
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("""
+        INSERT OR REPLACE INTO cronometro_sessao (topico_id, segundos_restantes, status, ultima_atualizacao)
+        VALUES (?, ?, ?, ?)
+    """, (int(topico_id), int(segundos), str(status_timer), time.time()))
+    conn.commit()
+    conn.close()
+
+def carregar_sessao_cronometro(topico_id):
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT segundos_restantes, status, ultima_atualizacao FROM cronometro_sessao WHERE topico_id = ?", (int(topico_id),))
+    res = c.fetchone()
+    conn.close()
+    if res:
+        seg, status_t, ult_at = res
+        # Se estava rodando quando a conexão caiu, descontar o tempo que passou no relógio
+        if status_t == 'RODANDO':
+            passado = time.time() - ult_at
+            seg = max(0, int(seg - passado))
+        return seg, status_t
+    return None, None
+
+def limpar_sessao_cronometro(topico_id):
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("DELETE FROM cronometro_sessao WHERE topico_id = ?", (int(topico_id),))
+    conn.commit()
+    conn.close()
+
 # -----------------------------------------------------------------------------
 # INTERFACE PRINCIPAL
 # -----------------------------------------------------------------------------
@@ -129,7 +168,7 @@ menu = st.sidebar.radio("Navegação", [
 conn = get_db()
 
 # =============================================================================
-# MENU 1: META & ROTINA DO DIA (COM CRONÔMETRO INTEGRADO)
+# MENU 1: META & ROTINA DO DIA (COM RESGATE DE SESSÃO)
 # =============================================================================
 if menu == "📅 Meta & Rotina do Dia":
     st.header("🎯 Sugestão Diária de Estudo e Rotina Policial")
@@ -187,21 +226,30 @@ if menu == "📅 Meta & Rotina do Dia":
                     minutos_f = int(round((tempo_horas - horas_f) * 60))
                     tempo_str = f"{horas_f}h{minutos_f:02d}m" if horas_f > 0 else f"{minutos_f} min"
                     
-                    topico_key = f"timer_{row['topico_id']}"
+                    topico_id = row['topico_id']
+                    topico_key = f"timer_{topico_id}"
                     
-                    # Inicialização do estado do cronômetro para cada tópico
+                    # Checar se existe uma sessão salva no banco de dados para esse tópico
+                    seg_salvos, status_salvo = carregar_sessao_cronometro(topico_id)
+                    
                     if f"{topico_key}_restante" not in st.session_state:
-                        st.session_state[f"{topico_key}_restante"] = total_segundos
+                        st.session_state[f"{topico_key}_restante"] = seg_salvos if seg_salvos is not None else total_segundos
                     if f"{topico_key}_ativo" not in st.session_state:
-                        st.session_state[f"{topico_key}_ativo"] = False
+                        st.session_state[f"{topico_key}_ativo"] = True if status_salvo == 'RODANDO' else False
 
                     with st.expander(f"📖 **{row['materia_nome']}** | Tempo Adaptativo: **{tempo_str}** | Domínio: `{niveis[i]}/10`", expanded=True):
                         st.markdown(f"**Conteúdo Específico:** {row['topico_nome']}")
                         st.write(f"**Status Atual:** `{row['status']}`")
                         
+                        # Alerta se houver interrupção detectada
+                        if seg_salvos is not None and seg_salvos < total_segundos and not st.session_state[f"{topico_key}_ativo"]:
+                            hrs_s = seg_salvos // 3600
+                            mins_s = (seg_salvos % 3600) // 60
+                            st.warning(f"⚠️ **Sessão interrompida detectada!** Você tinha **{hrs_s}h{mins_s:02d}m** restantes quando a página fechou.")
+                        
                         # --- Bloco do Cronômetro ---
                         st.markdown("---")
-                        st.markdown("#### ⏱️ Cronômetro de Estudo")
+                        st.markdown("#### ⏱️ Cronômetro de Estudo Persistente")
                         
                         seg_restantes = st.session_state[f"{topico_key}_restante"]
                         hrs_c = seg_restantes // 3600
@@ -213,19 +261,23 @@ if menu == "📅 Meta & Rotina do Dia":
                         
                         c1, c2, c3 = st.columns(3)
                         with c1:
-                            if st.button("▶️ Iniciar / Continuar", key=f"start_{row['topico_id']}"):
+                            if st.button("▶️ Iniciar / Retomar", key=f"start_{topico_id}"):
                                 st.session_state[f"{topico_key}_ativo"] = True
+                                salvar_sessao_cronometro(topico_id, st.session_state[f"{topico_key}_restante"], 'RODANDO')
                         with c2:
-                            if st.button("⏸️ Pausar", key=f"pause_{row['topico_id']}"):
+                            if st.button("⏸️ Pausar", key=f"pause_{topico_id}"):
                                 st.session_state[f"{topico_key}_ativo"] = False
+                                salvar_sessao_cronometro(topico_id, st.session_state[f"{topico_key}_restante"], 'PAUSADO')
                         with c3:
-                            if st.button("🔄 Reiniciar Tempo", key=f"reset_{row['topico_id']}"):
+                            if st.button("🔄 Reiniciar Tempo", key=f"reset_{topico_id}"):
                                 st.session_state[f"{topico_key}_ativo"] = False
                                 st.session_state[f"{topico_key}_restante"] = total_segundos
+                                limpar_sessao_cronometro(topico_id)
                                 st.rerun()
 
-                        # Loop do Cronômetro em Tempo Real
+                        # Loop do Cronômetro com salvamento periódico
                         if st.session_state[f"{topico_key}_ativo"]:
+                            last_save = time.time()
                             while st.session_state[f"{topico_key}_restante"] > 0 and st.session_state[f"{topico_key}_ativo"]:
                                 time.sleep(1)
                                 st.session_state[f"{topico_key}_restante"] -= 1
@@ -235,8 +287,14 @@ if menu == "📅 Meta & Rotina do Dia":
                                 r_s = r_seg % 60
                                 timer_display.markdown(f"### ⏳ `{r_h:02d}:{r_m:02d}:{r_s:02d}`")
                                 
+                                # Salva no banco de dados a cada 5 segundos para segurança contra quedas
+                                if time.time() - last_save >= 5:
+                                    salvar_sessao_cronometro(topico_id, r_seg, 'RODANDO')
+                                    last_save = time.time()
+                                
                                 if st.session_state[f"{topico_key}_restante"] == 0:
                                     st.session_state[f"{topico_key}_ativo"] = False
+                                    limpar_sessao_cronometro(topico_id)
                                     st.balloons()
                                     st.success("🔔 **Tempo encerrado!** Ótimo trabalho de estudo!")
                                     st.rerun()
@@ -246,19 +304,21 @@ if menu == "📅 Meta & Rotina do Dia":
                         # --- Finalização da Matéria ---
                         col_a, col_b = st.columns(2)
                         with col_a:
-                            if st.button(f"✅ Concluído Totalmente", key=f"conc_{row['topico_id']}"):
+                            if st.button(f"✅ Concluído Totalmente", key=f"conc_{topico_id}"):
                                 c = conn.cursor()
-                                c.execute("UPDATE topicos SET status = 'Concluído', teoria = 1 WHERE id = ?", (int(row['topico_id']),))
+                                c.execute("UPDATE topicos SET status = 'Concluído', teoria = 1 WHERE id = ?", (int(topico_id),))
                                 conn.commit()
+                                limpar_sessao_cronometro(topico_id)
                                 st.session_state[f"{topico_key}_restante"] = total_segundos
                                 st.session_state[f"{topico_key}_ativo"] = False
                                 st.success("Tópico Concluído!")
                                 st.rerun()
                         with col_b:
-                            if st.button(f"⏳ Parcialmente Estudado", key=f"parc_{row['topico_id']}"):
+                            if st.button(f"⏳ Parcialmente Estudado", key=f"parc_{topico_id}"):
                                 c = conn.cursor()
-                                c.execute("UPDATE topicos SET status = 'Parcial' WHERE id = ?", (int(row['topico_id']),))
+                                c.execute("UPDATE topicos SET status = 'Parcial' WHERE id = ?", (int(topico_id),))
                                 conn.commit()
+                                limpar_sessao_cronometro(topico_id)
                                 st.session_state[f"{topico_key}_restante"] = total_segundos
                                 st.session_state[f"{topico_key}_ativo"] = False
                                 st.info("Marcado como Parcial.")

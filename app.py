@@ -7,7 +7,7 @@ import time
 st.set_page_config(page_title="Sistema de Estudos & Carreira", layout="wide", page_icon="🛡️")
 
 # -----------------------------------------------------------------------------
-# BANCO DE DADOS DINÂMICO (SQLite)
+# BANCO DE DADOS DINÂMICO (SQLite com Suporte a Exclusão em Cascata)
 # -----------------------------------------------------------------------------
 def get_db():
     conn = sqlite3.connect("estudos_master.db")
@@ -52,9 +52,9 @@ def init_db():
                 )''')
     c.execute('''CREATE TABLE IF NOT EXISTS cronometro_estado (
                     topico_id INTEGER PRIMARY KEY,
-                    status TEXT, -- 'RODANDO', 'PAUSADO'
-                    fim_timestamp REAL, -- Timestamp de quando deve terminar
-                    segundos_pausados INTEGER -- Segundos restantes quando pausado
+                    status TEXT,
+                    fim_timestamp REAL,
+                    segundos_pausados INTEGER
                 )''')
     conn.commit()
     conn.close()
@@ -192,7 +192,7 @@ menu = st.sidebar.radio("Navegação", [
 conn = get_db()
 
 # =============================================================================
-# MENU 1: META & ROTINA DO DIA (CRONÔMETRO IMUNIZADO CONTRA QUEDAS DE CONEXÃO)
+# MENU 1: META & ROTINA DO DIA
 # =============================================================================
 if menu == "📅 Meta & Rotina do Dia":
     st.header("🎯 Sugestão Diária de Estudo e Rotina Policial")
@@ -252,7 +252,6 @@ if menu == "📅 Meta & Rotina do Dia":
                     
                     topico_id = row['topico_id']
                     
-                    # Obter estado real gravado no banco de dados
                     timer_data = get_timer_state(topico_id, total_segundos)
                     status_timer = timer_data['status']
                     seg_restantes = timer_data['restante']
@@ -287,14 +286,12 @@ if menu == "📅 Meta & Rotina do Dia":
                                 set_timer_stop(topico_id)
                                 st.rerun()
 
-                        # Atualização da tela se estiver rodando
                         if status_timer == 'RODANDO':
                             time.sleep(1)
                             st.rerun()
 
                         st.markdown("---")
                         
-                        # --- Finalização da Matéria ---
                         col_a, col_b = st.columns(2)
                         with col_a:
                             if st.button(f"✅ Concluído Totalmente", key=f"conc_{topico_id}"):
@@ -474,17 +471,18 @@ elif menu == "📊 Dashboard de Evolução":
                     st.dataframe(df_niv, use_container_width=True, hide_index=True)
 
 # =============================================================================
-# MENU 5: GERENCIADOR & CONFIGURAÇÕES
+# MENU 5: GERENCIADOR & CONFIGURAÇÕES & GERENCIADOR DE EXCLUSÃO
 # =============================================================================
 elif menu == "⚙️ Gerenciador & Importador Excel":
     st.header("⚙️ Gerenciador do Sistema")
     
-    t0, t1, t2, t3, t4 = st.tabs([
+    t0, t1, t2, t3, t4, t5 = st.tabs([
         "⚙️ Disp. de Tempo", 
         "1. Objetivos", 
         "2. Matérias", 
         "3. Tópicos", 
-        "4. 📥 Importar Excel"
+        "4. 📥 Importar Excel",
+        "🗑️ Excluir / Limpar Dados"
     ])
     
     with t0:
@@ -615,5 +613,49 @@ elif menu == "⚙️ Gerenciador & Importador Excel":
                         st.rerun()
                 except Exception as e:
                     st.error(f"Erro ao processar a planilha: {e}")
+
+    # --- ABA DE GERENCIAMENTO E EXCLUSÃO DE DADOS ---
+    with t5:
+        st.subheader("🗑️ Gerenciar e Excluir Dados Importados")
+        st.write("Use esta opção caso tenha importado um arquivo errado ou queira refazer a carga de dados.")
+        
+        df_metas_del = pd.read_sql_query("SELECT id, nome FROM metas", conn)
+        
+        if df_metas_del.empty:
+            st.info("Nenhum dado cadastrado no momento.")
+        else:
+            col_del1, col_del2 = st.columns(2)
+            
+            with col_del1:
+                st.markdown("#### 1. Excluir uma Matéria Específica")
+                sel_meta_d1 = st.selectbox("Selecione o Objetivo:", df_metas_del['nome'].tolist(), key="del_meta_1")
+                m_id_d1 = df_metas_del[df_metas_del['nome'] == sel_meta_d1]['id'].values[0]
+                
+                df_mats_d1 = pd.read_sql_query("SELECT id, nome FROM materias WHERE meta_id = ?", conn, params=(int(m_id_d1),))
+                
+                if df_mats_d1.empty:
+                    st.caption("Nenhuma matéria vinculada a este objetivo.")
+                else:
+                    sel_mat_del = st.selectbox("Selecione a Matéria para apagar:", df_mats_d1['nome'].tolist())
+                    mat_id_del = df_mats_d1[df_mats_d1['nome'] == sel_mat_del]['id'].values[0]
+                    
+                    if st.button("❌ Apagar Esta Matéria e Seus Tópicos"):
+                        c = conn.cursor()
+                        c.execute("DELETE FROM materias WHERE id = ?", (int(mat_id_del),))
+                        conn.commit()
+                        st.success(f"Matéria '{sel_mat_del}' excluída com sucesso!")
+                        st.rerun()
+
+            with col_del2:
+                st.markdown("#### 2. Apagar TODAS as Matérias de um Objetivo")
+                sel_meta_d2 = st.selectbox("Selecione o Objetivo:", df_metas_del['nome'].tolist(), key="del_meta_2")
+                m_id_d2 = df_metas_del[df_metas_del['nome'] == sel_meta_d2]['id'].values[0]
+                
+                if st.button("🚨 LIMPAR TODOS OS DADOS IMPORTADOS DESTE OBJETIVO", type="primary"):
+                    c = conn.cursor()
+                    c.execute("DELETE FROM materias WHERE meta_id = ?", (int(m_id_d2),))
+                    conn.commit()
+                    st.success(f"Todas as matérias e tópicos de '{sel_meta_d2}' foram apagados. Você pode importar novamente.")
+                    st.rerun()
 
 conn.close()

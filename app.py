@@ -3,14 +3,18 @@ import pandas as pd
 import datetime
 import sqlite3
 import time
+import os
 
 st.set_page_config(page_title="Sistema de Estudos & Carreira", layout="wide", page_icon="🛡️")
 
 # -----------------------------------------------------------------------------
-# BANCO DE DADOS DINÂMICO
+# BANCO DE DADOS DINÂMICO (COM GERAÇÃO DE CAMINHO ABSOLUTO FIXO)
 # -----------------------------------------------------------------------------
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, "estudos_master.db")
+
 def get_db():
-    conn = sqlite3.connect("estudos_master.db")
+    conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA foreign_keys = ON;")
     return conn
 
@@ -225,7 +229,7 @@ if menu == "📅 Meta & Rotina do Dia":
         df_metas = pd.read_sql_query("SELECT id, nome FROM metas WHERE ativa = 1", conn)
         
         if df_metas.empty:
-            st.warning("Nenum objetivo cadastrado. Cadastre um em '⚙️ Gerenciador'.")
+            st.warning("Nenhum objetivo cadastrado. Cadastre um em '⚙️ Gerenciador'.")
         else:
             meta_sel_rotina = st.selectbox("Selecione o Objetivo do Dia:", df_metas['nome'].tolist())
             meta_id_rotina = df_metas[df_metas['nome'] == meta_sel_rotina]['id'].values[0]

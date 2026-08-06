@@ -35,7 +35,7 @@ def init_db():
                     teoria INTEGER DEFAULT 0,
                     resumo INTEGER DEFAULT 0,
                     nivel INTEGER DEFAULT 0,
-                    concluido INTEGER DEFAULT 0,
+                    status TEXT DEFAULT 'Pendente', -- 'Pendente', 'Parcial', 'Concluído'
                     FOREIGN KEY(materia_id) REFERENCES materias(id) ON DELETE CASCADE
                 )''')
     c.execute('''CREATE TABLE IF NOT EXISTS exercicios (
@@ -46,40 +46,37 @@ def init_db():
                     erros INTEGER,
                     FOREIGN KEY(topico_id) REFERENCES topicos(id) ON DELETE CASCADE
                 )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS configuracoes (
+                    chave TEXT PRIMARY KEY,
+                    valor TEXT
+                )''')
+    
+    # Migração simples para colunas existentes caso o banco já exista
+    try:
+        c.execute("ALTER TABLE topicos ADD COLUMN status TEXT DEFAULT 'Pendente'")
+    except:
+        pass
+
     conn.commit()
     conn.close()
 
 init_db()
 
-# -----------------------------------------------------------------------------
-# LÓGICA DE ESCALAS DE TRABALHO
-# -----------------------------------------------------------------------------
-def calcular_fase_escala_24x72(data_atual, data_base):
-    dias_passados = (data_atual - data_base).days
-    fase = dias_passados % 4
-    if fase == 0:
-        return "Dia 1: PLANTÃO (24h)", 0.0, "Descanso total dos livros. Foco no serviço público."
-    elif fase == 1:
-        return "Dia 2: FOLGA 1 (Pós-Plantão)", 1.5, "Revisão leve de 1h30m (Revisar erros e conceitos)."
-    elif fase == 2:
-        return "Dia 3: FOLGA 2 (Estudo Intenso)", 3.5, "3h30m de estudo focado (Teoria + Questões)."
-    else:
-        return "Dia 4: FOLGA 3 (Estudo Intenso)", 3.5, "3h30m de estudo focado (Questões + TAF/Simulado)."
+# Auxiliares de Configuração
+def get_config(chave, valor_padrao):
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT valor FROM configuracoes WHERE chave = ?", (chave,))
+    res = c.fetchone()
+    conn.close()
+    return res[0] if res else valor_padrao
 
-def calcular_rotina_administrativo(data_atual, hora_inicio, hora_fim):
-    dia_semana = data_atual.weekday()
-    if dia_semana < 5:
-        return (
-            f"Expediente Administrativo ({hora_inicio.strftime('%H:%M')} às {hora_fim.strftime('%H:%M')})",
-            2.5,
-            "Dia de Trabalho. Meta de 2h30m no turno da noite ou horários vagos."
-        )
-    else:
-        return (
-            "Final de Semana (Livre)",
-            4.5,
-            "Dia Livre de Expediente. Aproveite para 4h30m de estudo focado."
-        )
+def set_config(chave, valor):
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES (?, ?)", (chave, str(valor)))
+    conn.commit()
+    conn.close()
 
 # -----------------------------------------------------------------------------
 # INTERFACE PRINCIPAL
@@ -88,48 +85,158 @@ st.title("🛡️ Sistema Unificado de Gestão de Estudos")
 
 menu = st.sidebar.radio("Navegação", [
     "📅 Meta & Rotina do Dia", 
-    "📝 Registrar Questões", 
     "📋 Checklist & Acompanhamento", 
+    "📝 Registrar Questões", 
     "📊 Dashboard de Evolução", 
     "⚙️ Gerenciador & Importador Excel"
 ])
 
 conn = get_db()
 
-# --- MENU 1: META DO DIA ---
+# =============================================================================
+# MENU 1: META & ROTINA DO DIA
+# =============================================================================
 if menu == "📅 Meta & Rotina do Dia":
-    st.header("🎯 Planejamento Diário e Escala de Trabalho")
+    st.header("🎯 Sugestão Diária de Estudo e Rotina Policial")
     
-    st.sidebar.subheader("⚙️ Configurar Regime de Trabalho")
-    tipo_regime = st.sidebar.selectbox("Selecione seu Regime Atual", ["Plantão (24x72h)", "Administrativo (Seg a Sex)"])
+    # 1. Configuração rápida de Escalado / Plantão
+    escalado = st.checkbox("🚨 Estarei Escalado Hoje / Plantão Extra (Suspender estudos hoje)", value=False)
     
-    hoje = datetime.date.today()
-    
-    if tipo_regime == "Plantão (24x72h)":
-        data_base_input = st.sidebar.date_input("Data do Último Plantão", datetime.date(2026, 8, 4))
-        fase_nome, horas_meta, orientacao = calcular_fase_escala_24x72(hoje, data_base_input)
+    if escalado:
+        st.warning("⚠️ **Modo Plantão/Escala Ativado:** O ciclo de estudos foi pausado para hoje. Bons serviços no plantão! O ciclo será retomado do exato ponto onde você parou assim que estiver livre.")
     else:
-        hora_in = st.sidebar.time_input("Início do Expediente", datetime.time(8, 0))
-        hora_fi = st.sidebar.time_input("Fim do Expediente", datetime.time(15, 0))
-        fase_nome, horas_meta, orientacao = calcular_rotina_administrativo(hoje, hora_in, hora_fi)
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        st.info(f"**Data Atual:** {hoje.strftime('%d/%m/%Y')}")
-        st.metric("Regime / Status Atual", fase_nome)
-    with col2:
-        st.metric("Meta de Estudo Sugerida", f"{horas_meta} horas")
-        st.write(f"**Diretriz:** {orientacao}")
+        # Carregar parâmetros configurados no Gerenciador
+        horas_disp = float(get_config("horas_estudo_dia", "3.0"))
+        turno_pref = get_config("turno_estudo", "Noite")
         
-    st.markdown("---")
-    st.subheader("📌 Objetivos Cadastrados e Ativos")
-    df_metas_ativas = pd.read_sql_query("SELECT nome, tipo FROM metas WHERE ativa = 1", conn)
-    if not df_metas_ativas.empty:
-        st.dataframe(df_metas_ativas, hide_index=True, use_container_width=True)
-    else:
-        st.warning("Nenhum objetivo ativo. Cadastre ou importe no menu '⚙️ Gerenciador'.")
+        st.info(f"💡 **Disponibilidade Hoje:** {horas_disp} horas no turno da **{turno_pref}** (Ajustável no menu Gerenciador).")
+        
+        df_metas = pd.read_sql_query("SELECT id, nome FROM metas WHERE ativa = 1", conn)
+        
+        if df_metas.empty:
+            st.warning("Nenhum objetivo cadastrado. Cadastre um em '⚙️ Gerenciador'.")
+        else:
+            meta_sel_rotina = st.selectbox("Selecione o Objetivo do Dia:", df_metas['nome'].tolist())
+            meta_id_rotina = df_metas[df_metas['nome'] == meta_sel_rotina]['id'].values[0]
+            
+            # Buscar próximos tópicos pendentes ou parciais por matéria
+            query_proximos = """
+                SELECT t.id as topico_id, t.nome as topico_nome, m.nome as materia_nome, t.status
+                FROM topicos t
+                JOIN materias m ON t.materia_id = m.id
+                WHERE m.meta_id = ? AND t.status != 'Concluído'
+                ORDER BY m.id, t.id
+            """
+            df_proximos = pd.read_sql_query(query_proximos, conn, params=(int(meta_id_rotina),))
+            
+            if df_proximos.empty:
+                st.balloons()
+                st.success("🎉 Parabéns! Todos os tópicos deste objetivo foram concluídos!")
+            else:
+                # Selecionar até 2 tópicos prioritários
+                topicos_sugeridos = df_proximos.groupby('materia_nome').first().reset_index().head(2)
+                tempo_por_materia = round(horas_disp / len(topicos_sugeridos), 1) if len(topicos_sugeridos) > 0 else horas_disp
+                
+                st.subheader("📌 Recomendações para a Sessão de Hoje:")
+                
+                for idx, row in topicos_sugeridos.iterrows():
+                    with st.expander(f"📖 Matéria: **{row['materia_nome']}** | Tempo Sugerido: **{tempo_por_materia}h**", expanded=True):
+                        st.markdown(f"**Conteúdo Específico:** {row['topico_nome']}")
+                        st.write(f"**Status Atual:** `{row['status']}`")
+                        
+                        col_a, col_b = st.columns(2)
+                        with col_a:
+                            if st.button(f"✅ Concluído Totalmente", key=f"conc_{row['topico_id']}"):
+                                c = conn.cursor()
+                                c.execute("UPDATE topicos SET status = 'Concluído', teoria = 1 WHERE id = ?", (int(row['topico_id']),))
+                                conn.commit()
+                                st.success("Tópico marcado como Concluído! Sincronizado automaticamente no Checklist.")
+                                st.rerun()
+                        with col_b:
+                            if st.button(f"⏳ Parcialmente Estudado", key=f"parc_{row['topico_id']}"):
+                                c = conn.cursor()
+                                c.execute("UPDATE topicos SET status = 'Parcial' WHERE id = ?", (int(row['topico_id']),))
+                                conn.commit()
+                                st.info("Marcado como Parcial. Ele reaparecerá no próximo ciclo para você finalizar.")
+                                st.rerun()
 
-# --- MENU 2: REGISTRAR QUESTÕES ---
+# =============================================================================
+# MENU 2: CHECKLIST & ACOMPANHAMENTO (MODULAR POR MATÉRIA)
+# =============================================================================
+elif menu == "📋 Checklist & Acompanhamento":
+    st.header("📋 Checklist de Conteúdos por Matéria")
+    
+    df_metas = pd.read_sql_query("SELECT id, nome FROM metas WHERE ativa = 1", conn)
+    
+    if df_metas.empty:
+        st.info("Nenhum objetivo cadastrado.")
+    else:
+        col_m1, col_m2 = st.columns(2)
+        with col_m1:
+            meta_sel = st.selectbox("1. Selecione o Objetivo", df_metas['nome'].tolist())
+            meta_id = df_metas[df_metas['nome'] == meta_sel]['id'].values[0]
+        
+        df_mat = pd.read_sql_query("SELECT id, nome FROM materias WHERE meta_id = ?", conn, params=(int(meta_id),))
+        
+        if df_mat.empty:
+            st.warning("Nenhuma matéria cadastrada para este objetivo.")
+        else:
+            with col_m2:
+                mat_sel = st.selectbox("2. Filtrar por Matéria", df_mat['nome'].tolist())
+                mat_id = df_mat[df_mat['nome'] == mat_sel]['id'].values[0]
+            
+            query = """
+                SELECT id, nome as Topico, teoria as Videoaula_PDF, resumo as Resumo_Mapa, 
+                       nivel as Nivel_0_a_10, status as Status
+                FROM topicos
+                WHERE materia_id = ?
+            """
+            df_topicos = pd.read_sql_query(query, conn, params=(int(mat_id),))
+            
+            if df_topicos.empty:
+                st.info("Nenhum tópico cadastrado nesta matéria.")
+            else:
+                df_topicos['Videoaula_PDF'] = df_topicos['Videoaula_PDF'].astype(bool)
+                df_topicos['Resumo_Mapa'] = df_topicos['Resumo_Mapa'].astype(bool)
+                
+                edited_df = st.data_editor(
+                    df_topicos[['id', 'Topico', 'Videoaula_PDF', 'Resumo_Mapa', 'Nivel_0_a_10', 'Status']],
+                    column_config={
+                        "Videoaula_PDF": st.column_config.CheckboxColumn("Teoria"),
+                        "Resumo_Mapa": st.column_config.CheckboxColumn("Resumo/Mapa"),
+                        "Status": st.column_config.SelectboxColumn(
+                            "Status de Conclusão",
+                            options=["Pendente", "Parcial", "Concluído"],
+                            required=True
+                        ),
+                        "Nivel_0_a_10": st.column_config.NumberColumn("Nível (0-10)", min_value=0, max_value=10, step=1)
+                    },
+                    disabled=["id", "Topico"],
+                    hide_index=True,
+                    use_container_width=True
+                )
+                
+                if st.button("💾 Salvar Alterações na Matéria"):
+                    c = conn.cursor()
+                    for idx, row in edited_df.iterrows():
+                        c.execute("""
+                            UPDATE topicos 
+                            SET teoria = ?, resumo = ?, nivel = ?, status = ? 
+                            WHERE id = ?
+                        """, (
+                            1 if row['Videoaula_PDF'] else 0,
+                            1 if row['Resumo_Mapa'] else 0,
+                            int(row['Nivel_0_a_10']),
+                            row['Status'],
+                            int(row['id'])
+                        ))
+                    conn.commit()
+                    st.success("Progresso salvo com sucesso!")
+                    st.rerun()
+
+# =============================================================================
+# MENU 3: REGISTRAR QUESTÕES
+# =============================================================================
 elif menu == "📝 Registrar Questões":
     st.header("📝 Registro de Desempenho em Exercícios")
     
@@ -169,67 +276,9 @@ elif menu == "📝 Registrar Questões":
                         conn.commit()
                         st.success("Registro de exercícios salvo com sucesso!")
 
-# --- MENU 3: CHECKLIST DE CONTEÚDOS ---
-elif menu == "📋 Checklist & Acompanhamento":
-    st.header("📋 Checklist Tríplice de Conteúdos")
-    
-    df_metas = pd.read_sql_query("SELECT id, nome FROM metas WHERE ativa = 1", conn)
-    
-    if df_metas.empty:
-        st.info("Nenhum objetivo cadastrado.")
-    else:
-        meta_sel = st.selectbox("Filtrar por Objetivo", df_metas['nome'].tolist())
-        meta_id = df_metas[df_metas['nome'] == meta_sel]['id'].values[0]
-        
-        query = """
-            SELECT t.id, m.nome as Materia, t.nome as Topico, 
-                   t.teoria as Videoaula_PDF, t.resumo as Resumo_Mapa, 
-                   t.nivel as Nivel_0_a_10, t.concluido as Concluido
-            FROM topicos t
-            JOIN materias m ON t.materia_id = m.id
-            WHERE m.meta_id = ?
-        """
-        df_topicos = pd.read_sql_query(query, conn, params=(int(meta_id),))
-        
-        if df_topicos.empty:
-            st.info("Nenhum tópico cadastrado para este objetivo.")
-        else:
-            df_topicos['Videoaula_PDF'] = df_topicos['Videoaula_PDF'].astype(bool)
-            df_topicos['Resumo_Mapa'] = df_topicos['Resumo_Mapa'].astype(bool)
-            df_topicos['Concluido'] = df_topicos['Concluido'].astype(bool)
-            
-            edited_df = st.data_editor(
-                df_topicos[['id', 'Materia', 'Topico', 'Videoaula_PDF', 'Resumo_Mapa', 'Nivel_0_a_10', 'Concluido']],
-                column_config={
-                    "Videoaula_PDF": st.column_config.CheckboxColumn("Videoaula/PDF"),
-                    "Resumo_Mapa": st.column_config.CheckboxColumn("Resumo/Mapa"),
-                    "Concluido": st.column_config.CheckboxColumn("Concluído"),
-                    "Nivel_0_a_10": st.column_config.NumberColumn("Nível (0-10)", min_value=0, max_value=10, step=1)
-                },
-                disabled=["id", "Materia", "Topico"],
-                hide_index=True,
-                use_container_width=True
-            )
-            
-            if st.button("💾 Salvar Alterações no Checklist"):
-                c = conn.cursor()
-                for idx, row in edited_df.iterrows():
-                    c.execute("""
-                        UPDATE topicos 
-                        SET teoria = ?, resumo = ?, nivel = ?, concluido = ? 
-                        WHERE id = ?
-                    """, (
-                        1 if row['Videoaula_PDF'] else 0,
-                        1 if row['Resumo_Mapa'] else 0,
-                        int(row['Nivel_0_a_10']),
-                        1 if row['Concluido'] else 0,
-                        int(row['id'])
-                    ))
-                conn.commit()
-                st.success("Progresso salvo com sucesso!")
-                st.rerun()
-
-# --- MENU 4: RELATÓRIOS ---
+# =============================================================================
+# MENU 4: DASHBOARD DE EVOLUÇÃO
+# =============================================================================
 elif menu == "📊 Dashboard de Evolução":
     st.header("📊 Dashboard Geral de Desempenho")
     
@@ -245,59 +294,52 @@ elif menu == "📊 Dashboard de Evolução":
                 m_id = row_meta['id']
                 
                 q_top = """
-                    SELECT t.id, t.nivel, t.concluido 
+                    SELECT t.id, t.nivel, t.status 
                     FROM topicos t 
                     JOIN materias m ON t.materia_id = m.id 
                     WHERE m.meta_id = ?
                 """
                 df_top_meta = pd.read_sql_query(q_top, conn, params=(int(m_id),))
                 total_t = len(df_top_meta)
-                conc_t = len(df_top_meta[df_top_meta['concluido'] == 1])
+                conc_t = len(df_top_meta[df_top_meta['status'] == 'Concluído'])
                 pct = (conc_t / total_t * 100) if total_t > 0 else 0
                 media_nivel = df_top_meta['nivel'].mean() if total_t > 0 else 0
                 
                 col_x, col_y, col_z = st.columns(3)
-                col_x.metric("Avanço Geral do Edital", f"{pct:.1f}%", f"{conc_t}/{total_t} concluídos")
+                col_x.metric("Avanço do Edital", f"{pct:.1f}%", f"{conc_t}/{total_t} concluídos")
                 col_y.metric("Nível Médio de Domínio", f"{media_nivel:.1f} / 10")
                 col_z.progress(pct / 100)
-                
-                st.markdown("---")
-                q_ex = """
-                    SELECT m.nome as Materia, e.acertos, e.erros 
-                    FROM exercicios e
-                    JOIN topicos t ON e.topico_id = t.id
-                    JOIN materias m ON t.materia_id = m.id
-                    WHERE m.meta_id = ?
-                """
-                df_ex_meta = pd.read_sql_query(q_ex, conn, params=(int(m_id),))
-                
-                if not df_ex_meta.empty:
-                    st.subheader("🎯 Resumo de Questões Resolvidas")
-                    tot_a = df_ex_meta['acertos'].sum()
-                    tot_e = df_ex_meta['erros'].sum()
-                    tot_q = tot_a + tot_e
-                    taxa = (tot_a / tot_q * 100) if tot_q > 0 else 0
-                    
-                    st.write(f"**Total de Questões Feitas:** {tot_q} | **Aproveitamento Geral:** {taxa:.1f}%")
-                    
-                    grp = df_ex_meta.groupby('Materia').sum().reset_index()
-                    grp['Total'] = grp['acertos'] + grp['erros']
-                    grp['% Acertos'] = (grp['acertos'] / grp['Total'] * 100).round(1)
-                    st.dataframe(grp[['Materia', 'Total', 'acertos', 'erros', '% Acertos']], hide_index=True, use_container_width=True)
-                else:
-                    st.info("Nenhum exercício registrado para este objetivo ainda.")
 
-# --- MENU 5: GERENCIADOR COMPLETO & IMPORTADOR ---
+# =============================================================================
+# MENU 5: GERENCIADOR & CONFIGURAÇÕES
+# =============================================================================
 elif menu == "⚙️ Gerenciador & Importador Excel":
-    st.header("⚙️ Gerenciador do Sistema & Leitor de Planilhas")
+    st.header("⚙️ Gerenciador do Sistema")
     
-    t1, t2, t3, t4 = st.tabs([
+    t0, t1, t2, t3, t4 = st.tabs([
+        "⚙️ Disp. de Tempo", 
         "1. Objetivos", 
         "2. Matérias", 
         "3. Tópicos", 
-        "4. 📥 Importar Planilha Completa"
+        "4. 📥 Importar Excel"
     ])
     
+    # Aba 0: Configuração de Carga Horária e Turnos
+    with t0:
+        st.subheader("Configurar Disponibilidade Diária de Estudos")
+        hor_atual = float(get_config("horas_estudo_dia", "3.0"))
+        tur_atual = get_config("turno_estudo", "Noite")
+        
+        with st.form("form_disp"):
+            novas_horas = st.number_input("Horas disponíveis para estudo em casa (por dia):", min_value=0.5, max_value=12.0, value=hor_atual, step=0.5)
+            novo_turno = st.selectbox("Turno Principal de Estudo:", ["Manhã", "Tarde", "Noite"], index=["Manhã", "Tarde", "Noite"].index(tur_atual))
+            
+            if st.form_submit_button("Salvar Horários"):
+                set_config("horas_estudo_dia", novas_horas)
+                set_config("turno_estudo", novo_turno)
+                st.success("Configurações de horários salvas!")
+                st.rerun()
+
     # Aba 1: Objetivos
     with t1:
         st.subheader("Cadastrar Novo Objetivo")
@@ -314,19 +356,6 @@ elif menu == "⚙️ Gerenciador & Importador Excel":
                         st.rerun()
                     except:
                         st.error("Esse objetivo já existe.")
-        
-        st.subheader("Objetivos Cadastrados")
-        df_m = pd.read_sql_query("SELECT id, nome, tipo FROM metas", conn)
-        if not df_m.empty:
-            for i, r in df_m.iterrows():
-                col_m1, col_m2 = st.columns([3, 1])
-                col_m1.write(f"📌 **{r['nome']}** ({r['tipo']})")
-                if col_m2.button(f"🗑️ Excluir Objetivo", key=f"del_m_{r['id']}"):
-                    c = conn.cursor()
-                    c.execute("DELETE FROM metas WHERE id = ?", (r['id'],))
-                    conn.commit()
-                    st.success("Objetivo excluído!")
-                    st.rerun()
 
     # Aba 2: Matérias
     with t2:
@@ -339,32 +368,13 @@ elif menu == "⚙️ Gerenciador & Importador Excel":
             m_id_sel = df_m[df_m['nome'] == sel_m_mat]['id'].values[0]
             
             with st.form("f_mat"):
-                n_materia = st.text_input("Nome da Matéria (Ex: Direito Administrativo, Direito Civil II)")
+                n_materia = st.text_input("Nome da Matéria (Ex: Direito Administrativo)")
                 if st.form_submit_button("Adicionar Matéria"):
                     if n_materia.strip() != "":
                         c = conn.cursor()
                         c.execute("INSERT INTO materias (meta_id, nome) VALUES (?, ?)", (int(m_id_sel), n_materia.strip()))
                         conn.commit()
                         st.success(f"Matéria '{n_materia}' adicionada!")
-                        st.rerun()
-
-            st.markdown("---")
-            st.subheader("Matérias Cadastradas")
-            df_mat_list = pd.read_sql_query("""
-                SELECT m.id, m.nome as materia, meta.nome as objetivo 
-                FROM materias m 
-                JOIN metas meta ON m.meta_id = meta.id
-            """, conn)
-            
-            if not df_mat_list.empty:
-                for i, r in df_mat_list.iterrows():
-                    col_a, col_b = st.columns([3, 1])
-                    col_a.write(f"📖 **{r['materia']}** *(Objetivo: {r['objetivo']})*")
-                    if col_b.button("🗑️ Excluir Matéria", key=f"del_mat_{r['id']}"):
-                        c = conn.cursor()
-                        c.execute("DELETE FROM materias WHERE id = ?", (r['id'],))
-                        conn.commit()
-                        st.success("Matéria excluída!")
                         st.rerun()
 
     # Aba 3: Tópicos
@@ -396,46 +406,25 @@ elif menu == "⚙️ Gerenciador & Importador Excel":
                         st.success("Tópico adicionado com sucesso!")
                         st.rerun()
 
-            st.markdown("---")
-            st.subheader("Tópicos Cadastrados")
-            df_top_list = pd.read_sql_query("""
-                SELECT t.id, t.nome as topico, m.nome as materia, t.nivel 
-                FROM topicos t 
-                JOIN materias m ON t.materia_id = m.id
-            """, conn)
-            
-            if not df_top_list.empty:
-                for i, r in df_top_list.iterrows():
-                    col_a, col_b = st.columns([3, 1])
-                    col_a.write(f"📝 **{r['topico']}** *(Matéria: {r['materia']} | Nível: {r['nivel']}/10)*")
-                    if col_b.button("🗑️ Excluir Tópico", key=f"del_top_{r['id']}"):
-                        c = conn.cursor()
-                        c.execute("DELETE FROM topicos WHERE id = ?", (r['id'],))
-                        conn.commit()
-                        st.success("Tópico excluído!")
-                        st.rerun()
-
-    # Aba 4: Importador da Sua Planilha
+    # Aba 4: Importador Excel
     with t4:
-        st.subheader("📥 Importar Planilha Completa (`CRONOGRAMA DE ESTUDO.xlsx`)")
-        st.write("O leitor abaixo consome automaticamente todas as abas da sua planilha Excel de uma só vez!")
-        
+        st.subheader("📥 Importar Planilha Excel (`.xlsx`)")
         df_m = pd.read_sql_query("SELECT id, nome FROM metas WHERE ativa = 1", conn)
         
         if df_m.empty:
-            st.warning("Cadastre primeiro um Objetivo na Aba 1 (ex: 'Concurso PMPE') antes de importar a planilha.")
+            st.warning("Cadastre primeiro um Objetivo na Aba 1 antes de importar a planilha.")
         else:
             meta_excel_sel = st.selectbox("Vincular os dados desta planilha ao Objetivo:", df_m['nome'].tolist())
             meta_excel_id = df_m[df_m['nome'] == meta_excel_sel]['id'].values[0]
             
-            uploaded_file = st.file_uploader("Selecione sua planilha `CRONOGRAMA DE ESTUDO.xlsx`", type=["xlsx"])
+            uploaded_file = st.file_uploader("Selecione o arquivo Excel", type=["xlsx"])
             
             if uploaded_file is not None:
                 try:
                     xls = pd.ExcelFile(uploaded_file)
-                    st.success(f"Planilha reconhecida com sucesso! Abas encontradas: {', '.join(xls.sheet_names)}")
+                    st.success(f"Planilha reconhecida! Abas: {', '.join(xls.sheet_names)}")
                     
-                    if st.button("🚀 Processar e Importar Tudo para o Banco de Dados"):
+                    if st.button("🚀 Processar e Importar Tudo"):
                         c = conn.cursor()
                         total_m_count = 0
                         total_t_count = 0
@@ -461,12 +450,11 @@ elif menu == "⚙️ Gerenciador & Importador Excel":
                                     continue
                                 
                                 topico_desc = str(row.iloc[2]).strip()
-                                
                                 c.execute("INSERT INTO topicos (materia_id, nome) VALUES (?, ?)", (int(mat_id), topico_desc))
                                 total_t_count += 1
                         
                         conn.commit()
-                        st.success(f"🎉 Importação concluída! {total_m_count} novas matérias e {total_t_count} tópicos cadastrados!")
+                        st.success(f"🎉 Importação concluída! {total_m_count} matérias e {total_t_count} tópicos salvos.")
                         st.rerun()
                 except Exception as e:
                     st.error(f"Erro ao processar a planilha: {e}")

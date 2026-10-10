@@ -54,6 +54,12 @@ def init_db():
                     chave TEXT PRIMARY KEY,
                     valor TEXT
                 )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS editais (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    nome TEXT UNIQUE,
+                    conteudo TEXT,
+                    ajustes TEXT
+                )''')
     c.execute('''CREATE TABLE IF NOT EXISTS cronometro_estado (
                     topico_id INTEGER PRIMARY KEY,
                     status TEXT,
@@ -417,6 +423,224 @@ def gerar_json_cronograma_cfo():
                        "inicio": CRONO_INICIO.isoformat(), "data_prova": "2027-02-28", "blocos": blocos},
                       ensure_ascii=False, indent=1)
 
+# -----------------------------------------------------------------------------
+# NOVO: PLANEJADOR (o app distribui o tempo pelo peso, prioridade e conhecimento)
+# -----------------------------------------------------------------------------
+FATOR_PRIORIDADE = {"Alta": 1.5, "Média": 1.0, "Baixa": 0.65}
+FATOR_CONHECIMENTO = {0: 1.6, 1: 1.45, 2: 1.3, 3: 1.15, 4: 1.0, 5: 0.85}
+PESO_TOPICO = {"Alta": 3, "Média": 2, "Baixa": 1}
+LEGENDA_CONHECIMENTO = {0: "não sei nada", 1: "muito pouco", 2: "pouco", 3: "razoável",
+                        4: "bom", 5: "bom conhecimento e facilidade"}
+
+def ler_arquivo_edital(dados):
+    """Confere um edital (formato com 'materias'). Retorna (edital, erros)."""
+    erros = []
+    objetivo = str(dados.get("objetivo", "")).strip()
+    if not objetivo:
+        erros.append("Falta o campo 'objetivo' (nome do concurso).")
+    try:
+        data_prova = datetime.date.fromisoformat(str(dados.get("data_prova", "")))
+    except ValueError:
+        data_prova = None
+        erros.append("O campo 'data_prova' precisa ser uma data no formato AAAA-MM-DD.")
+    materias = []
+    lista = dados.get("materias")
+    if not isinstance(lista, list) or not lista:
+        erros.append("Falta a lista 'materias'.")
+        lista = []
+    for n, m in enumerate(lista, start=1):
+        try:
+            nome = str(m["nome"]).strip()
+            pontos = float(m.get("pontos", m.get("questoes", 0)))
+        except (KeyError, TypeError, ValueError):
+            erros.append(f"Matéria nº {n}: falta o nome ou os pontos.")
+            continue
+        prioridade = str(m.get("prioridade", "Média")).strip().capitalize().replace("Media", "Média")
+        if prioridade not in FATOR_PRIORIDADE:
+            prioridade = "Média"
+        topicos = []
+        for t in m.get("topicos", []):
+            if isinstance(t, dict):
+                tn, tp = str(t.get("nome", "")).strip(), str(t.get("prioridade", "Média")).strip().capitalize().replace("Media", "Média")
+            else:
+                tn, tp = str(t).strip(), "Média"
+            if tn:
+                topicos.append({"nome": tn, "prioridade": tp if tp in PESO_TOPICO else "Média"})
+        if not nome or pontos <= 0:
+            erros.append(f"Matéria nº {n}: nome vazio ou pontos igual a zero.")
+            continue
+        tipo = str(m.get("tipo", "")).strip().lower()
+        if not topicos and tipo != "redacao":
+            erros.append(f"Matéria '{nome}': lista de tópicos vazia.")
+            continue
+        materias.append({"nome": nome, "bloco": str(m.get("bloco", "")), "questoes": m.get("questoes"),
+                         "pontos": pontos, "prioridade": prioridade, "tipo": tipo,
+                         "conhecimento": max(0, min(5, int(m.get("conhecimento", 3)))) if str(m.get("conhecimento", 3)).isdigit() else 3,
+                         "topicos": topicos})
+    if erros:
+        return None, erros[:10]
+    return {"objetivo": objetivo, "tipo": str(dados.get("tipo", "Concurso")), "data_prova": data_prova.isoformat(),
+            "banca": str(dados.get("banca", "")), "materias": materias}, []
+
+def pesos_das_materias(materias, ajustes):
+    """Peso de cada matéria = pontos x fator de prioridade x fator de conhecimento (redação fica de fora)."""
+    pesos = {}
+    for m in materias:
+        if m["tipo"] == "redacao":
+            continue
+        aj = ajustes.get(m["nome"], {})
+        prio = aj.get("prioridade", m["prioridade"])
+        conh = int(aj.get("conhecimento", m["conhecimento"]))
+        pesos[m["nome"]] = m["pontos"] * FATOR_PRIORIDADE[prio] * FATOR_CONHECIMENTO[conh]
+    return pesos
+
+def _distribuir_topicos(topicos, n_sessoes):
+    """Divide os tópicos (em ordem) pelas sessões de uma matéria. Tópicos de prioridade Alta ganham mais sessões."""
+    if n_sessoes <= 0 or not topicos:
+        return []
+    pesos = [PESO_TOPICO[t["prioridade"]] for t in topicos]
+    if n_sessoes >= len(topicos):
+        extras = n_sessoes - len(topicos)
+        qtd = [1] * len(topicos)
+        total_p = sum(pesos)
+        for i in range(len(topicos)):
+            qtd[i] += int(extras * pesos[i] / total_p)
+        resto = n_sessoes - sum(qtd)
+        for i in sorted(range(len(topicos)), key=lambda k: -pesos[k])[:resto]:
+            qtd[i] += 1
+        rotulos = []
+        for t, q in zip(topicos, qtd):
+            for k in range(q):
+                if q == 1:
+                    rotulos.append(t["nome"])
+                elif k == q - 1:
+                    rotulos.append(f"{t['nome']} (questões)")
+                else:
+                    rotulos.append(f"{t['nome']} (parte {k + 1})")
+        return rotulos
+    # menos sessões que tópicos: agrupa tópicos vizinhos, equilibrando o peso
+    alvo = sum(pesos) / n_sessoes
+    grupos, atual, acum = [], [], 0.0
+    for i, t in enumerate(topicos):
+        atual.append(t["nome"])
+        acum += pesos[i]
+        faltam_topicos = len(topicos) - i - 1
+        faltam_grupos = n_sessoes - len(grupos) - 1
+        if (acum >= alvo and faltam_grupos > 0) or faltam_topicos == faltam_grupos:
+            if faltam_grupos > 0:
+                grupos.append("; ".join(atual))
+                atual, acum = [], 0.0
+    if atual:
+        grupos.append("; ".join(atual))
+    return grupos
+
+def gerar_cronograma_do_edital(edital, ajustes, inicio_crono, horas_dia, pct_revisao=0.15, com_simulados=True, primeiro_dia=None):
+    """Monta os blocos (semana, dia, ordem, bloco, minutos, matéria, tópico) até a véspera da prova."""
+    data_prova = datetime.date.fromisoformat(edital["data_prova"])
+    materias = {m["nome"]: m for m in edital["materias"]}
+    redacao = [m["nome"] for m in edital["materias"] if m["tipo"] == "redacao"]
+    pesos = pesos_das_materias(edital["materias"], ajustes)
+    soma_pesos = sum(pesos.values())
+    if soma_pesos <= 0:
+        return []
+    cota = {n: p / soma_pesos for n, p in pesos.items()}
+    prioridade_de = {m["nome"]: ajustes.get(m["nome"], {}).get("prioridade", m["prioridade"]) for m in edital["materias"]}
+    minutos_dia = int(round(horas_dia * 60))
+
+    dias = []
+    d = inicio_crono
+    while d < data_prova:
+        if d.weekday() < 5 and (primeiro_dia is None or d >= primeiro_dia):
+            dias.append(d)
+        d += datetime.timedelta(days=1)
+    if not dias:
+        return []
+    n_semanas = (dias[-1] - inicio_crono).days // 7 + 1
+    sem_revisao = 0 if n_semanas < 4 else max(1, round(n_semanas * pct_revisao))
+    primeira_revisao = n_semanas - sem_revisao + 1
+    ultimo_dia_semana = {}
+    for d in dias:
+        ultimo_dia_semana[(d - inicio_crono).days // 7 + 1] = d
+    dias_simulado = set()
+    if com_simulados and sem_revisao >= 2:
+        for s in range(primeira_revisao, n_semanas):
+            dias_simulado.add(ultimo_dia_semana[s])
+
+    # 1ª passada: decide a matéria de cada bloco pelo método do maior "atraso" em relação à cota
+    atribuido = {n: 0 for n in pesos}
+    total_atrib = 0
+    blocos = []  # (semana, dia, ordem, bloco, minutos, matéria, fase)
+    for d in dias:
+        semana, dia = (d - inicio_crono).days // 7 + 1, d.weekday()
+        fase = "revisao" if semana >= primeira_revisao else "conteudo"
+        if d in dias_simulado:
+            blocos.append((semana, dia, 1, "Simulado", min(minutos_dia, 300), "Simulados", "simulado"))
+            continue
+        rev = 30 if minutos_dia >= 120 else 0
+        red = 0
+        if redacao and d == ultimo_dia_semana[semana] and minutos_dia - rev >= 120:
+            red = 90
+        conteudo = minutos_dia - rev - red
+        if conteudo >= 150:
+            a = min(120, int(-(-conteudo * 0.55 // 30) * 30))
+            partes = [a, conteudo - a]
+        else:
+            partes = [conteudo] if conteudo > 0 else []
+        ordem, usadas_hoje = 1, set()
+        for i, mins in enumerate(partes):
+            candidatas = [n for n in pesos if n not in usadas_hoje] or list(pesos)
+            if i == 0 and len(partes) > 1:  # o bloco longo do dia vai para uma matéria de prioridade Alta
+                altas = [n for n in candidatas if prioridade_de.get(n) == "Alta"]
+                candidatas = altas or candidatas
+            escolhida = max(candidatas, key=lambda n: (cota[n] * (total_atrib + mins) - atribuido[n], pesos[n]))
+            atribuido[escolhida] += mins
+            total_atrib += mins
+            usadas_hoje.add(escolhida)
+            blocos.append((semana, dia, ordem, f"Bloco {i + 1}", mins, escolhida, fase))
+            ordem += 1
+        if red:
+            blocos.append((semana, dia, ordem, "Redação", red, redacao[0], "redacao"))
+            ordem += 1
+        if rev:
+            texto_rev = "Revisão da semana" if d == ultimo_dia_semana[semana] else "Caderno de erros"
+            blocos.append((semana, dia, ordem, "Revisão", rev, "Revisão", texto_rev))
+
+    # 2ª passada: coloca os tópicos de cada matéria, em ordem, nas sessões da fase de conteúdo
+    sessoes = {}
+    for idx, b in enumerate(blocos):
+        if b[6] == "conteudo":
+            sessoes.setdefault(b[5], []).append(idx)
+    rotulos = {}
+    for nome, idxs in sessoes.items():
+        for idx, rot in zip(idxs, _distribuir_topicos(materias[nome]["topicos"], len(idxs))):
+            rotulos[idx] = rot
+    itens = []
+    for idx, (semana, dia, ordem, bloco, mins, materia, fase) in enumerate(blocos):
+        if fase == "conteudo":
+            topico = rotulos.get(idx, "Questões e revisão")
+        elif fase == "revisao":
+            topico = "Revisão geral + questões"
+        elif fase == "simulado":
+            topico = "Simulado completo + redação"
+        elif fase == "redacao":
+            topico = "Redação semanal (cronometrada)"
+        else:
+            topico = fase
+        itens.append((semana, dia, ordem, bloco, mins, materia, topico))
+    return itens
+
+def salvar_edital(conn, edital, ajustes=None):
+    import json
+    c = conn.cursor()
+    c.execute("SELECT id, ajustes FROM editais WHERE nome = ?", (edital["objetivo"],))
+    res = c.fetchone()
+    if res:
+        c.execute("UPDATE editais SET conteudo = ? WHERE id = ?", (json.dumps(edital, ensure_ascii=False), res[0]))
+    else:
+        c.execute("INSERT INTO editais (nome, conteudo, ajustes) VALUES (?, ?, ?)",
+                  (edital["objetivo"], json.dumps(edital, ensure_ascii=False), json.dumps(ajustes or {}, ensure_ascii=False)))
+    conn.commit()
+
 def total_semanas(meta_id, conn):
     c = conn.cursor()
     c.execute("""SELECT MAX(t.semana) FROM topicos t JOIN materias m ON t.materia_id = m.id
@@ -455,6 +679,7 @@ st.title("🛡️ Sistema Unificado de Gestão de Estudos")
 
 menu = st.sidebar.radio("Navegação", [
     "📅 Meta & Rotina do Dia",
+    "🧭 Planejar Estudos",
     "🗓️ Cronograma Semanal",
     "📋 Checklist & Acompanhamento",
     "📝 Registrar Questões", 
@@ -670,6 +895,125 @@ if menu == "📅 Meta & Rotina do Dia":
 # =============================================================================
 # MENU 2: CHECKLIST & ACOMPANHAMENTO
 # =============================================================================
+elif menu == "🧭 Planejar Estudos":
+    import json as _json
+    st.header("🧭 Planejar Estudos")
+    st.write("Marque o quanto você já sabe de cada matéria e a prioridade dela. "
+             "O app distribui as horas até a véspera da prova e monta o cronograma.")
+    df_ed = pd.read_sql_query("SELECT id, nome, conteudo, ajustes FROM editais ORDER BY id DESC", conn)
+    if df_ed.empty:
+        st.info("Nenhum edital salvo ainda. Peça ao Claude o arquivo do edital e envie em "
+                "'⚙️ Gerenciador' → aba '📅 Cronogramas' → '📤 Importar'.")
+    else:
+        nome_ed = st.selectbox("Edital:", df_ed["nome"].tolist())
+        linha_ed = df_ed[df_ed["nome"] == nome_ed].iloc[0]
+        edital = _json.loads(linha_ed["conteudo"])
+        ajustes = _json.loads(linha_ed["ajustes"] or "{}")
+        data_prova_ed = datetime.date.fromisoformat(edital["data_prova"])
+        cfg = ajustes.get("_config", {})
+        
+        st.subheader("1. Sua rotina")
+        r1, r2 = st.columns(2)
+        hoje = datetime.date.today()
+        proxima_segunda = hoje + datetime.timedelta(days=(7 - hoje.weekday()) % 7)
+        with r1:
+            inicio_escolhido = st.date_input("Começar a estudar em:", value=datetime.date.fromisoformat(cfg.get("inicio", proxima_segunda.isoformat())),
+                                             format="DD/MM/YYYY")
+            horas_plan = st.number_input("Horas de estudo por dia (segunda a sexta):", min_value=1.0, max_value=10.0,
+                                         value=float(cfg.get("horas", get_config("horas_estudo_dia", "4.0"))), step=0.5)
+        with r2:
+            pct_rev = st.slider("Semanas finais só de revisão (% do período):", 0, 30, int(cfg.get("pct_revisao", 15)), step=5)
+            com_sim = st.checkbox("Incluir simulados nas semanas de revisão", value=bool(cfg.get("simulados", True)))
+        st.caption(f"Prova em {data_prova_ed:%d/%m/%Y}. O cronograma vai até a véspera.")
+        
+        st.subheader("2. Suas matérias")
+        st.caption("Conhecimento: 0 = não sei nada · 1 = muito pouco · 2 = pouco · 3 = razoável · 4 = bom · "
+                   "5 = bom conhecimento e facilidade de aprender")
+        with st.form("form_planejar"):
+            novos = {}
+            for i, m in enumerate(edital["materias"]):
+                aj = ajustes.get(m["nome"], {})
+                info = f"{m['pontos']:g} pts" + (f" · {m['bloco']}" if m.get("bloco") else "")
+                if m.get("tipo") == "redacao":
+                    st.markdown(f"**{m['nome']}** · {info}  \n<small>1 redação por semana, sempre no último dia útil.</small>",
+                                unsafe_allow_html=True)
+                    st.divider()
+                    continue
+                st.markdown(f"**{m['nome']}** · {info}")
+                c_conh, c_prio = st.columns([3, 1])
+                with c_conh:
+                    conh = st.radio("Conhecimento", [0, 1, 2, 3, 4, 5], horizontal=True,
+                                    index=int(aj.get("conhecimento", m.get("conhecimento", 3))),
+                                    key=f"conh_{linha_ed['id']}_{i}", label_visibility="collapsed")
+                with c_prio:
+                    opcoes_prio = ["Alta", "Média", "Baixa"]
+                    prio = st.selectbox("Prioridade", opcoes_prio,
+                                        index=opcoes_prio.index(aj.get("prioridade", m["prioridade"])),
+                                        key=f"prio_{linha_ed['id']}_{i}", label_visibility="collapsed")
+                novos[m["nome"]] = {"conhecimento": int(conh), "prioridade": prio}
+                st.divider()
+            calcular = st.form_submit_button("📊 Calcular distribuição do tempo", type="primary")
+        if calcular:
+            novos["_config"] = {"inicio": inicio_escolhido.isoformat(), "horas": horas_plan,
+                                "pct_revisao": pct_rev, "simulados": com_sim}
+            conn.execute("UPDATE editais SET ajustes = ? WHERE id = ?",
+                         (_json.dumps(novos, ensure_ascii=False), int(linha_ed["id"])))
+            conn.commit()
+            ajustes = novos
+            st.session_state[f"calculado_{linha_ed['id']}"] = True
+        
+        with st.expander("Como o app calcula o tempo"):
+            st.markdown("Peso de cada matéria = **pontos no edital × prioridade × conhecimento**.\n\n"
+                        "- Prioridade: Alta ×1,5 · Média ×1,0 · Baixa ×0,65\n"
+                        "- Conhecimento: 0 ×1,6 · 1 ×1,45 · 2 ×1,3 · 3 ×1,15 · 4 ×1,0 · 5 ×0,85\n\n"
+                        "Todo dia tem 30 min de revisão (caderno de erros). A redação ocupa 90 min no último dia útil "
+                        "de cada semana. As horas restantes são repartidas pelo peso, alternando as matérias. "
+                        "Os tópicos de prioridade Alta recebem mais sessões.")
+        
+        if st.session_state.get(f"calculado_{linha_ed['id']}") or any(k != "_config" for k in ajustes):
+            inicio_seg = inicio_escolhido - datetime.timedelta(days=inicio_escolhido.weekday())
+            itens_plan = gerar_cronograma_do_edital(edital, ajustes, inicio_seg, horas_plan, pct_rev / 100, com_sim,
+                                                    primeiro_dia=inicio_escolhido)
+            if not itens_plan:
+                st.error("Não há dias úteis entre a data de início e a prova. Ajuste a data de início.")
+            else:
+                st.subheader("3. Distribuição calculada")
+                df_pl = pd.DataFrame(itens_plan, columns=["Semana", "Dia", "Ordem", "Bloco", "Minutos", "Matéria", "Tópico"])
+                tot_h = df_pl["Minutos"].sum() / 60
+                k1, k2, k3 = st.columns(3)
+                k1.metric("Semanas", int(df_pl["Semana"].max()))
+                k2.metric("Horas no total", f"{tot_h:.0f} h")
+                k3.metric("Blocos", len(df_pl))
+                por_mat = (df_pl.groupby("Matéria")["Minutos"].sum() / 60).round(1).sort_values(ascending=False).reset_index()
+                por_mat.columns = ["Matéria", "Horas"]
+                por_mat["Parte do tempo"] = por_mat["Horas"] / tot_h
+                st.dataframe(por_mat, column_config={
+                    "Horas": st.column_config.NumberColumn("Horas", format="%.1f"),
+                    "Parte do tempo": st.column_config.ProgressColumn("Parte do tempo", min_value=0.0, max_value=float(por_mat["Parte do tempo"].max()))
+                }, use_container_width=True, hide_index=True)
+                with st.expander("Ver a semana 1"):
+                    df_v = df_pl[df_pl["Semana"] == 1].copy()
+                    df_v["Dia"] = df_v["Dia"].apply(lambda d: DIAS_SEMANA[int(d)])
+                    st.dataframe(df_v[["Dia", "Bloco", "Minutos", "Matéria", "Tópico"]], use_container_width=True, hide_index=True)
+                
+                st.subheader("4. Gerar o cronograma")
+                c = conn.cursor()
+                c.execute("SELECT id FROM metas WHERE nome = ?", (edital["objetivo"],))
+                existe_meta = c.fetchone() is not None
+                liberado = True
+                if existe_meta:
+                    st.warning(f"Já existe um cronograma '{edital['objetivo']}'. Gerar de novo APAGA o progresso "
+                               "e as questões registradas nele. Baixe um backup antes, se quiser guardar.")
+                    liberado = st.checkbox("Entendi. Quero substituir pelo novo cronograma.", key=f"subst_plan_{linha_ed['id']}")
+                if st.button("🚀 Gerar e salvar cronograma", type="primary", disabled=not liberado):
+                    n = carregar_cronograma(conn, edital["objetivo"], inicio_seg, itens_plan, edital.get("tipo", "Concurso"),
+                                            substituir=existe_meta)
+                    set_config("horas_estudo_dia", horas_plan)
+                    st.success(f"Cronograma gerado: {n} blocos. Veja em '🗓️ Cronograma Semanal' e em '📅 Meta & Rotina do Dia'.")
+                    st.balloons()
+        else:
+            st.info("Marque suas matérias e toque em **📊 Calcular distribuição do tempo**.")
+
 elif menu == "🗓️ Cronograma Semanal":
     st.header("🗓️ Cronograma Semanal")
 
@@ -994,10 +1338,34 @@ elif menu == "⚙️ Gerenciador & Importador Excel":
 
         st.markdown("---")
         st.subheader("📤 Importar cronograma de outro edital")
-        st.write("Envie o edital ao Claude e peça o cronograma **no formato do app**. "
-                 "Ele devolve um arquivo **.json**; envie esse arquivo aqui.")
+        st.write("Envie o edital ao Claude e peça o arquivo **no formato do app**. Ele devolve um **.json**; envie aqui. "
+                 "Se for um arquivo de **edital** (matérias e tópicos), ele vai para '🧭 Planejar Estudos'. "
+                 "Se for um **cronograma pronto** (blocos com dia e hora), ele é importado direto.")
         arq_crono = st.file_uploader("Arquivo do cronograma (.json)", type=["json"], key="up_crono")
+        eh_edital = False
         if arq_crono is not None:
+            import json as _json
+            try:
+                _bruto = _json.loads(arq_crono.getvalue().decode("utf-8-sig"))
+                eh_edital = isinstance(_bruto, dict) and "materias" in _bruto
+            except Exception:
+                _bruto = None
+        if arq_crono is not None and eh_edital:
+            edital_lido, erros_ed = ler_arquivo_edital(_bruto)
+            if erros_ed:
+                st.error("Não consegui ler o edital. Problemas encontrados:")
+                for e in erros_ed:
+                    st.write(f"- {e}")
+            else:
+                st.success(f"Edital conferido: **{edital_lido['objetivo']}** · prova em "
+                           f"{datetime.date.fromisoformat(edital_lido['data_prova']):%d/%m/%Y}")
+                st.dataframe(pd.DataFrame([{"Matéria": m["nome"], "Pontos": m["pontos"], "Prioridade sugerida": m["prioridade"],
+                                            "Tópicos": len(m["topicos"])} for m in edital_lido["materias"]]),
+                             use_container_width=True, hide_index=True)
+                if st.button("✅ Salvar este edital", type="primary"):
+                    salvar_edital(conn, edital_lido)
+                    st.success("Edital salvo! Agora vá em '🧭 Planejar Estudos' para marcar seu conhecimento e gerar o cronograma.")
+        elif arq_crono is not None:
             dados_crono, erros_crono = ler_arquivo_cronograma(arq_crono.getvalue())
             if erros_crono:
                 st.error("Não consegui ler o arquivo. Problemas encontrados:")

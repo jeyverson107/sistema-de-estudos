@@ -684,7 +684,7 @@ menu = st.sidebar.radio("Navegação", [
     "📋 Checklist & Acompanhamento",
     "📝 Registrar Questões", 
     "📊 Dashboard de Evolução", 
-    "⚙️ Gerenciador & Importador Excel"
+    "⚙️ Gerenciador"
 ])
 
 conn = get_db()
@@ -1301,17 +1301,16 @@ elif menu == "📊 Dashboard de Evolução":
                         st.bar_chart(df_s.set_index('Semana'))
 
 # =============================================================================
-# MENU 5: GERENCIADOR & IMPORTADOR EXCEL
+# MENU 5: GERENCIADOR
 # =============================================================================
-elif menu == "⚙️ Gerenciador & Importador Excel":
+elif menu == "⚙️ Gerenciador":
     st.header("⚙️ Gerenciador do Sistema")
     
-    t0, t1, t2, t3, t4, t6, t5 = st.tabs([
+    t0, t1, t2, t3, t6, t5 = st.tabs([
         "⚙️ Disp. de Tempo",
         "1. Objetivos",
         "2. Matérias",
         "3. Tópicos",
-        "4. 📥 Importar Excel",
         "📅 Cronogramas",
         "🗑️ Excluir / Limpar Dados"
     ])
@@ -1506,63 +1505,6 @@ elif menu == "⚙️ Gerenciador & Importador Excel":
                         conn.commit()
                         st.success("Tópico adicionado com sucesso!")
                         st.rerun()
-
-    with t4:
-        st.subheader("📥 Importar Planilha Excel (`.xlsx`)")
-        df_m = pd.read_sql_query("SELECT id, nome FROM metas WHERE ativa = 1", conn)
-        
-        if df_m.empty:
-            st.warning("Cadastre primeiro um Objetivo na Aba 1 antes de importar.")
-        else:
-            meta_excel_sel = st.selectbox("Vincular os dados desta planilha ao Objetivo:", df_m['nome'].tolist())
-            meta_excel_id = df_m[df_m['nome'] == meta_excel_sel]['id'].values[0]
-            
-            uploaded_file = st.file_uploader("Selecione o arquivo Excel", type=["xlsx"])
-            
-            if uploaded_file is not None:
-                try:
-                    xls = pd.ExcelFile(uploaded_file)
-                    st.success(f"Planilha reconhecida! Abas: {', '.join(xls.sheet_names)}")
-                    
-                    if st.button("🚀 Processar e Importar Tudo"):
-                        c = conn.cursor()
-                        total_m_count = 0
-                        total_t_count = 0
-                        
-                        for sheet in xls.sheet_names:
-                            if sheet.upper() == "DASHBOARD":
-                                continue
-                            
-                            df_sheet = pd.read_excel(uploaded_file, sheet_name=sheet)
-                            mat_nome = normalizar_nome_materia(sheet.strip().upper())
-                            
-                            c.execute("SELECT id FROM materias WHERE meta_id = ? AND UPPER(nome) = ?", (int(meta_excel_id), mat_nome.upper()))
-                            res_mat = c.fetchone()
-                            if res_mat:
-                                mat_id = res_mat[0]
-                            else:
-                                c.execute("INSERT INTO materias (meta_id, nome) VALUES (?, ?)", (int(meta_excel_id), mat_nome))
-                                mat_id = c.lastrowid
-                                total_m_count += 1
-                            
-                            for idx, row in df_sheet.iterrows():
-                                if pd.isna(row.iloc[2]): 
-                                    continue
-                                
-                                topico_desc = str(row.iloc[2]).strip()
-                                
-                                # Ignora textos irrelevantes, cabeçalhos ou zeros que venham do Excel
-                                if topico_desc in ["0", "0.0", "", "None", "nan", "Tópicos", "Conteúdo"]:
-                                    continue
-                                
-                                c.execute("INSERT INTO topicos (materia_id, nome) VALUES (?, ?)", (int(mat_id), topico_desc))
-                                total_t_count += 1
-                        
-                        conn.commit()
-                        st.success(f"🎉 Importação concluída! {total_m_count} matérias e {total_t_count} tópicos salvos com sucesso.")
-                        st.rerun()
-                except Exception as e:
-                    st.error(f"Erro ao processar a planilha: {e}")
 
     with t5:
         st.subheader("🗑️ Gerenciar e Excluir Dados Importados")

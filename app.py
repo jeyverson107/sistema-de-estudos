@@ -2327,13 +2327,11 @@ elif menu == "📊 Dashboard de Evolução":
 elif menu == "⚙️ Gerenciador":
     st.header("⚙️ Gerenciador do Sistema")
     
-    t0, t1, t2, t3, t6, t7, t5 = st.tabs([
+    t0, t6, t7, t1, t5 = st.tabs([
         "⚙️ Disp. de Tempo",
-        "1. Objetivos",
-        "2. Matérias",
-        "3. Tópicos",
         "📅 Cronogramas",
         "☁️ Nuvem",
+        "✍️ Cadastro manual",
         "🗑️ Excluir / Limpar Dados"
     ])
 
@@ -2544,10 +2542,13 @@ elif menu == "⚙️ Gerenciador":
                 st.rerun()
 
     with t1:
-        st.subheader("Cadastrar Novo Objetivo")
+        st.info("**O CFO CBMPE 2027 não precisa desta aba**: objetivo, matérias, cronograma e checklist do edital já vêm prontos. "
+                "Use o cadastro manual só para outros objetivos, como a faculdade. Para o CFO, marque o que estudou no "
+                "'📋 Checklist' → '📚 Itens do edital'.")
+        st.subheader("1. Novo objetivo")
         with st.form("f_meta"):
-            n_meta = st.text_input("Nome do Objetivo (Ex: Concurso PMPE, Faculdade UPE)")
-            tipo_meta = st.selectbox("Tipo", ["Concurso", "Faculdade", "Outro"])
+            n_meta = st.text_input("Nome do Objetivo (Ex: Faculdade UPE – 3º período)")
+            tipo_meta = st.selectbox("Tipo", ["Faculdade", "Concurso", "Outro"])
             if st.form_submit_button("Adicionar Objetivo"):
                 if n_meta.strip() != "":
                     try:
@@ -2556,20 +2557,22 @@ elif menu == "⚙️ Gerenciador":
                         conn.commit()
                         st.success(f"Objetivo '{n_meta}' adicionado!")
                         st.rerun()
-                    except:
+                    except sqlite3.IntegrityError:
                         st.error("Esse objetivo já existe.")
 
-    with t2:
+        st.markdown("---")
+        st.subheader("2. Nova matéria")
         df_m = pd.read_sql_query("SELECT id, nome FROM metas", conn)
         if df_m.empty:
-            st.warning("Cadastre um objetivo primeiro.")
+            st.caption("Cadastre um objetivo primeiro.")
         else:
-            st.subheader("Cadastrar Nova Matéria")
             sel_m_mat = st.selectbox("Vincular ao Objetivo:", df_m['nome'].tolist(), key="sb_m_mat")
             m_id_sel = df_m[df_m['nome'] == sel_m_mat]['id'].values[0]
-            
+            if sel_m_mat == CRONO_META_NOME:
+                st.warning("Este é o objetivo do CFO, que já tem todas as matérias do edital. Uma matéria nova aqui não entra "
+                           "no cronograma nem no checklist do edital.")
             with st.form("f_mat"):
-                n_materia = st.text_input("Nome da Matéria (Ex: Direito Administrativo)")
+                n_materia = st.text_input("Nome da Matéria (Ex: Direito Civil)")
                 if st.form_submit_button("Adicionar Matéria"):
                     if n_materia.strip() != "":
                         m_corrigida = normalizar_nome_materia(n_materia)
@@ -2579,28 +2582,29 @@ elif menu == "⚙️ Gerenciador":
                         st.success(f"Matéria '{m_corrigida}' adicionada!")
                         st.rerun()
 
-    with t3:
+        st.markdown("---")
+        st.subheader("3. Novo tópico")
         df_mat_all = pd.read_sql_query("""
-            SELECT m.id as mat_id, m.nome as mat_nome, meta.nome as meta_nome 
-            FROM materias m 
+            SELECT m.id as mat_id, m.nome as mat_nome, meta.nome as meta_nome
+            FROM materias m
             JOIN metas meta ON m.meta_id = meta.id
         """, conn)
-        
         if df_mat_all.empty:
-            st.warning("Cadastre matérias primeiro.")
+            st.caption("Cadastre uma matéria primeiro.")
         else:
-            st.subheader("Cadastrar Tópico Individual")
             options_mat = [f"{r['meta_nome']} -> {r['mat_nome']}" for i, r in df_mat_all.iterrows()]
             sel_mat_top = st.selectbox("Selecione a Matéria:", options_mat)
             idx_mat_sel = options_mat.index(sel_mat_top)
             target_mat_id = df_mat_all.iloc[idx_mat_sel]['mat_id']
-            
+            if df_mat_all.iloc[idx_mat_sel]['meta_nome'] == CRONO_META_NOME:
+                st.warning("Atenção: um tópico criado aqui numa matéria do CFO fica sem dia e sem semana, então não aparece "
+                           "no cronograma nem no checklist do edital. Para o CFO, use o '📋 Checklist'.")
             with st.form("f_topico"):
                 n_topico = st.text_input("Descrição do Tópico")
                 if st.form_submit_button("Adicionar Tópico"):
                     if n_topico.strip() != "":
                         c = conn.cursor()
-                        c.execute("INSERT INTO topicos (materia_id, nome) VALUES (?, ?)", 
+                        c.execute("INSERT INTO topicos (materia_id, nome) VALUES (?, ?)",
                                   (int(target_mat_id), n_topico.strip()))
                         conn.commit()
                         st.success("Tópico adicionado com sucesso!")
@@ -2609,6 +2613,8 @@ elif menu == "⚙️ Gerenciador":
     with t5:
         st.subheader("🗑️ Gerenciar e Excluir Dados Importados")
         st.write("Use esta opção caso tenha importado um arquivo errado ou queira refazer a carga de dados.")
+        st.warning("Apagar não tem volta. Antes, baixe um backup em '📅 Cronogramas' → '⬇️ Baixar backup (.db)'. "
+                   "O checklist do edital, as revisões e as questões registradas **não** são apagados por esta aba.")
         
         df_metas_del = pd.read_sql_query("SELECT id, nome FROM metas", conn)
         
@@ -2630,7 +2636,8 @@ elif menu == "⚙️ Gerenciador":
                     sel_mat_del = st.selectbox("Selecione a Matéria para apagar:", df_mats_d1['nome'].tolist())
                     mat_id_del = df_mats_d1[df_mats_d1['nome'] == sel_mat_del]['id'].values[0]
                     
-                    if st.button("❌ Apagar Esta Matéria e Seus Tópicos"):
+                    conf_d1 = st.checkbox(f"Entendi que isso apaga a matéria '{sel_mat_del}' e todos os blocos dela.", key="conf_del_1")
+                    if st.button("❌ Apagar Esta Matéria e Seus Tópicos", disabled=not conf_d1):
                         c = conn.cursor()
                         c.execute("DELETE FROM materias WHERE id = ?", (int(mat_id_del),))
                         conn.commit()
@@ -2642,7 +2649,8 @@ elif menu == "⚙️ Gerenciador":
                 sel_meta_d2 = st.selectbox("Selecione o Objetivo:", df_metas_del['nome'].tolist(), key="del_meta_2")
                 m_id_d2 = df_metas_del[df_metas_del['nome'] == sel_meta_d2]['id'].values[0]
                 
-                if st.button("🚨 LIMPAR TODOS OS DADOS IMPORTADOS DESTE OBJETIVO", type="primary"):
+                conf_d2 = st.checkbox(f"Entendi que isso apaga TODAS as matérias e blocos de '{sel_meta_d2}'.", key="conf_del_2")
+                if st.button("🚨 LIMPAR TODOS OS DADOS IMPORTADOS DESTE OBJETIVO", type="primary", disabled=not conf_d2):
                     c = conn.cursor()
                     c.execute("DELETE FROM materias WHERE meta_id = ?", (int(m_id_d2),))
                     conn.commit()

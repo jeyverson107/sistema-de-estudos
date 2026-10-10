@@ -329,34 +329,100 @@ def gerar_cronograma_cfo():
     add(18, 4, 2, "Bloco 2", 120, RED, "Redação (semana de Carnaval)")
     return itens
 
-def nome_topico_crono(semana, dia, topico):
-    inicio = CRONO_INICIO + datetime.timedelta(weeks=semana - 1, days=dia)
-    return f"S{semana:02d} {DIAS_SEMANA[dia][:3]} {inicio:%d/%m} · {topico}"
+def nome_topico_crono(semana, dia, topico, inicio_crono=CRONO_INICIO):
+    data_bloco = inicio_crono + datetime.timedelta(weeks=semana - 1, days=dia)
+    return f"S{semana:02d} {DIAS_SEMANA[dia][:3]} {data_bloco:%d/%m} · {topico}"
 
-def carregar_cronograma_cfo(conn, substituir=False):
-    """Cria o objetivo, as matérias e os tópicos do cronograma. Retorna quantos tópicos foram criados."""
+def carregar_cronograma(conn, nome_objetivo, inicio_crono, itens, tipo="Concurso", substituir=False):
+    """Cria o objetivo, as matérias e os tópicos de um cronograma.
+    itens = lista de (semana, dia, ordem, bloco, minutos, matéria, tópico). Retorna quantos blocos foram criados."""
     c = conn.cursor()
-    c.execute("SELECT id FROM metas WHERE nome = ?", (CRONO_META_NOME,))
+    c.execute("SELECT id FROM metas WHERE nome = ?", (nome_objetivo,))
     existente = c.fetchone()
     if existente:
         if not substituir:
             return 0
         c.execute("DELETE FROM metas WHERE id = ?", (existente[0],))  # apaga matérias, tópicos e questões dele (CASCADE)
-    c.execute("INSERT INTO metas (nome, tipo) VALUES (?, ?)", (CRONO_META_NOME, "Concurso"))
+    c.execute("INSERT INTO metas (nome, tipo) VALUES (?, ?)", (nome_objetivo, tipo))
     meta_id = c.lastrowid
     ids_materias = {}
     total = 0
-    for semana, dia, ordem, bloco, minutos, materia, topico in gerar_cronograma_cfo():
+    for semana, dia, ordem, bloco, minutos, materia, topico in itens:
+        materia = normalizar_nome_materia(materia)
         if materia not in ids_materias:
             c.execute("INSERT INTO materias (meta_id, nome) VALUES (?, ?)", (meta_id, materia))
             ids_materias[materia] = c.lastrowid
         c.execute("""INSERT INTO topicos (materia_id, nome, semana, dia, ordem, bloco, minutos_planejados, minutos_estudados)
                      VALUES (?, ?, ?, ?, ?, ?, ?, 0)""",
-                  (ids_materias[materia], nome_topico_crono(semana, dia, topico), semana, dia, ordem, bloco, minutos))
+                  (ids_materias[materia], nome_topico_crono(semana, dia, topico, inicio_crono),
+                   semana, dia, ordem, bloco, minutos))
         total += 1
     conn.commit()
-    set_config(f"cronograma_inicio_{meta_id}", CRONO_INICIO.isoformat())
+    set_config(f"cronograma_inicio_{meta_id}", inicio_crono.isoformat())
     return total
+
+def carregar_cronograma_cfo(conn, substituir=False):
+    return carregar_cronograma(conn, CRONO_META_NOME, CRONO_INICIO, gerar_cronograma_cfo(), "Concurso", substituir)
+
+def ler_arquivo_cronograma(conteudo_bytes):
+    """Lê e confere o arquivo .json de cronograma gerado pelo Claude.
+    Retorna (dados, erros). 'dados' só vem preenchido se não houver erros."""
+    import json
+    erros = []
+    try:
+        dados = json.loads(conteudo_bytes.decode("utf-8-sig"))
+    except Exception as e:
+        return None, [f"O arquivo não é um JSON válido ({e})."]
+    if not isinstance(dados, dict):
+        return None, ["O arquivo não tem o formato esperado."]
+    objetivo = str(dados.get("objetivo", "")).strip()
+    if not objetivo:
+        erros.append("Falta o campo 'objetivo' (nome do concurso).")
+    try:
+        inicio_crono = datetime.date.fromisoformat(str(dados.get("inicio", "")))
+        if inicio_crono.weekday() != 0:
+            erros.append("A data de 'inicio' precisa ser uma segunda-feira.")
+    except ValueError:
+        inicio_crono = None
+        erros.append("O campo 'inicio' precisa ser uma data no formato AAAA-MM-DD.")
+    blocos = dados.get("blocos")
+    itens = []
+    if not isinstance(blocos, list) or not blocos:
+        erros.append("Falta a lista 'blocos' com os blocos de estudo.")
+    else:
+        for n, b in enumerate(blocos, start=1):
+            try:
+                semana, dia = int(b["semana"]), int(b["dia"])
+                ordem, minutos = int(b.get("ordem", 1)), int(b["minutos"])
+                materia, topico = str(b["materia"]).strip(), str(b["topico"]).strip()
+                bloco = str(b.get("bloco", "Bloco")).strip()
+            except (KeyError, TypeError, ValueError):
+                erros.append(f"Bloco nº {n}: falta algum campo ou há valor inválido.")
+                continue
+            if semana < 1 or not (0 <= dia <= 4) or minutos <= 0 or not materia or not topico:
+                erros.append(f"Bloco nº {n}: semana, dia (0 a 4), minutos, matéria ou tópico fora do padrão.")
+                continue
+            itens.append((semana, dia, ordem, bloco, minutos, materia, topico))
+    if erros:
+        return None, erros[:10]
+    return {"objetivo": objetivo, "tipo": str(dados.get("tipo", "Concurso")), "inicio": inicio_crono,
+            "data_prova": str(dados.get("data_prova", "")), "itens": itens}, []
+
+def gerar_json_cronograma_cfo():
+    """Exporta o cronograma CFO no mesmo formato do importador (serve de modelo)."""
+    import json
+    blocos = [{"semana": s, "dia": d, "ordem": o, "bloco": b, "minutos": m, "materia": mat, "topico": t}
+              for s, d, o, b, m, mat, t in gerar_cronograma_cfo()]
+    return json.dumps({"versao": 1, "objetivo": CRONO_META_NOME, "tipo": "Concurso",
+                       "inicio": CRONO_INICIO.isoformat(), "data_prova": "2027-02-28", "blocos": blocos},
+                      ensure_ascii=False, indent=1)
+
+def total_semanas(meta_id, conn):
+    c = conn.cursor()
+    c.execute("""SELECT MAX(t.semana) FROM topicos t JOIN materias m ON t.materia_id = m.id
+                 WHERE m.meta_id = ?""", (int(meta_id),))
+    res = c.fetchone()[0]
+    return int(res) if res else 0
 
 def semana_e_dia_de_hoje(meta_id):
     """Devolve (semana, dia) de hoje no cronograma. dia = 0..6 (5 e 6 = fim de semana)."""
@@ -425,10 +491,12 @@ if menu == "📅 Meta & Rotina do Dia":
             # NOVO: se o objetivo tem cronograma, mostra os blocos de hoje
             if meta_tem_cronograma(meta_id_rotina, conn):
                 semana_hoje, dia_hoje = semana_e_dia_de_hoje(meta_id_rotina)
+                n_semanas = total_semanas(meta_id_rotina, conn)
+                inicio_rot = datetime.date.fromisoformat(get_config(f"cronograma_inicio_{meta_id_rotina}", CRONO_INICIO.isoformat()))
                 if semana_hoje < 1:
-                    st.info("📆 O cronograma começa na segunda-feira, 12/10/2026.")
-                elif semana_hoje > 20:
-                    st.success("🏁 O cronograma de 20 semanas terminou. Boa prova!")
+                    st.info(f"📆 O cronograma começa na segunda-feira, {inicio_rot:%d/%m/%Y}.")
+                elif semana_hoje > n_semanas:
+                    st.success(f"🏁 O cronograma de {n_semanas} semanas terminou. Boa prova!")
                 elif dia_hoje > 4:
                     st.info(f"📆 Hoje é fim de semana (semana {semana_hoje}). Use o tempo livre para repor o que ficou pendente:")
                     df_pend = pd.read_sql_query("""
@@ -609,14 +677,15 @@ elif menu == "🗓️ Cronograma Semanal":
     metas_crono = [r for _, r in df_metas.iterrows() if meta_tem_cronograma(r['id'], conn)]
 
     if not metas_crono:
-        st.info("Nenhum cronograma carregado ainda. Vá em '⚙️ Gerenciador' → aba '📅 Cronograma CFO' e clique em carregar.")
+        st.info("Nenhum cronograma carregado ainda. Vá em '⚙️ Gerenciador' → aba '📅 Cronogramas' e carregue ou importe um cronograma.")
     else:
         nomes_crono = [r['nome'] for r in metas_crono]
         meta_sel_cr = st.selectbox("Objetivo:", nomes_crono)
         meta_id_cr = int([r['id'] for r in metas_crono if r['nome'] == meta_sel_cr][0])
 
         semana_hoje, _ = semana_e_dia_de_hoje(meta_id_cr)
-        semana_padrao = min(max(semana_hoje, 1), 20)
+        n_semanas_cr = max(total_semanas(meta_id_cr, conn), 1)
+        semana_padrao = min(max(semana_hoje, 1), n_semanas_cr)
         inicio_cr = datetime.date.fromisoformat(get_config(f"cronograma_inicio_{meta_id_cr}", CRONO_INICIO.isoformat()))
 
         def rotulo_semana(s):
@@ -624,7 +693,7 @@ elif menu == "🗓️ Cronograma Semanal":
             fim = ini + datetime.timedelta(days=4)
             return f"Semana {s} ({ini:%d/%m} a {fim:%d/%m})" + ("  ← atual" if s == semana_hoje else "")
 
-        semana_sel = st.selectbox("Semana:", list(range(1, 21)), index=semana_padrao - 1, format_func=rotulo_semana)
+        semana_sel = st.selectbox("Semana:", list(range(1, n_semanas_cr + 1)), index=semana_padrao - 1, format_func=rotulo_semana)
 
         df_sem = pd.read_sql_query("""
             SELECT t.id, t.dia, t.ordem, t.bloco as Bloco, m.nome as Matéria, t.nome as Tópico,
@@ -899,7 +968,7 @@ elif menu == "⚙️ Gerenciador & Importador Excel":
         "2. Matérias",
         "3. Tópicos",
         "4. 📥 Importar Excel",
-        "📅 Cronograma CFO",
+        "📅 Cronogramas",
         "🗑️ Excluir / Limpar Dados"
     ])
 
@@ -922,6 +991,52 @@ elif menu == "⚙️ Gerenciador & Importador Excel":
                 n = carregar_cronograma_cfo(conn)
                 st.success(f"Cronograma carregado: {n} blocos. Veja em '🗓️ Cronograma Semanal'.")
                 st.rerun()
+
+        st.markdown("---")
+        st.subheader("📤 Importar cronograma de outro edital")
+        st.write("Envie o edital ao Claude e peça o cronograma **no formato do app**. "
+                 "Ele devolve um arquivo **.json**; envie esse arquivo aqui.")
+        arq_crono = st.file_uploader("Arquivo do cronograma (.json)", type=["json"], key="up_crono")
+        if arq_crono is not None:
+            dados_crono, erros_crono = ler_arquivo_cronograma(arq_crono.getvalue())
+            if erros_crono:
+                st.error("Não consegui ler o arquivo. Problemas encontrados:")
+                for e in erros_crono:
+                    st.write(f"- {e}")
+            else:
+                itens_crono = dados_crono["itens"]
+                df_prev = pd.DataFrame(itens_crono, columns=["Semana", "Dia", "Ordem", "Bloco", "Minutos", "Matéria", "Tópico"])
+                n_sem = int(df_prev["Semana"].max())
+                fim_crono = dados_crono["inicio"] + datetime.timedelta(weeks=n_sem - 1, days=4)
+                st.success(f"Arquivo conferido: **{dados_crono['objetivo']}**")
+                p1, p2, p3, p4 = st.columns(4)
+                p1.metric("Semanas", n_sem)
+                p2.metric("Blocos", len(df_prev))
+                p3.metric("Matérias", df_prev["Matéria"].nunique())
+                p4.metric("Horas", f"{df_prev['Minutos'].sum() / 60:.0f} h")
+                st.caption(f"De {dados_crono['inicio']:%d/%m/%Y} a {fim_crono:%d/%m/%Y}"
+                           + (f" · prova em {dados_crono['data_prova']}" if dados_crono['data_prova'] else ""))
+                st.markdown("**Horas por matéria (confira antes de importar):**")
+                resumo = (df_prev.groupby("Matéria")["Minutos"].sum() / 60).round(1).sort_values(ascending=False)
+                st.dataframe(resumo.rename("Horas").reset_index(), use_container_width=True, hide_index=True)
+                with st.expander("Ver os blocos da semana 1"):
+                    df_s1 = df_prev[df_prev["Semana"] == 1].copy()
+                    df_s1["Dia"] = df_s1["Dia"].apply(lambda d: DIAS_SEMANA[int(d)])
+                    st.dataframe(df_s1.drop(columns=["Semana", "Ordem"]), use_container_width=True, hide_index=True)
+                
+                c.execute("SELECT id FROM metas WHERE nome = ?", (dados_crono["objetivo"],))
+                existe_obj = c.fetchone() is not None
+                pode_importar = True
+                if existe_obj:
+                    st.warning(f"Já existe um objetivo chamado '{dados_crono['objetivo']}'. Importar APAGA o progresso dele.")
+                    pode_importar = st.checkbox("Entendi. Quero substituir.", key="conf_subst_crono")
+                if st.button("✅ Importar este cronograma", type="primary", disabled=not pode_importar):
+                    n = carregar_cronograma(conn, dados_crono["objetivo"], dados_crono["inicio"], itens_crono,
+                                            dados_crono["tipo"], substituir=existe_obj)
+                    st.success(f"Cronograma importado: {n} blocos. Veja em '🗓️ Cronograma Semanal'.")
+                    st.rerun()
+        st.download_button("⬇️ Baixar modelo (cronograma CFO em .json)", data=gerar_json_cronograma_cfo(),
+                           file_name="modelo_cronograma.json", mime="application/json")
 
         st.markdown("---")
         st.subheader("💾 Backup do banco de dados")

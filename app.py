@@ -302,6 +302,28 @@ def init_db():
                     data TEXT PRIMARY KEY,
                     obs TEXT
                 )''')
+    # NOVO: cronômetro de tempo líquido dos blocos (Iniciar / Pausar / Finalizar)
+    c.execute('''CREATE TABLE IF NOT EXISTS cronometro_bloco (
+                    topico_id INTEGER PRIMARY KEY,
+                    status TEXT,
+                    inicio_trecho REAL,
+                    acumulado REAL DEFAULT 0,
+                    pausas INTEGER DEFAULT 0,
+                    iniciado_em TEXT
+                )''')
+    # NOVO: cada sessão de estudo finalizada, com a data em que você estudou de verdade
+    c.execute('''CREATE TABLE IF NOT EXISTS sessoes_estudo (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    data TEXT,
+                    objetivo TEXT,
+                    materia TEXT,
+                    topico_id INTEGER,
+                    minutos INTEGER,
+                    pausas INTEGER DEFAULT 0,
+                    inicio TEXT,
+                    fim TEXT,
+                    origem TEXT
+                )''')
 
     # Auto-correção para "portugês" -> "Português" no banco
     c.execute("UPDATE materias SET nome = REPLACE(nome, 'portugês', 'português') WHERE nome LIKE '%portugês%'")
@@ -1202,36 +1224,151 @@ def data_do_bloco(inicio, semana, dia):
 def prioridade_da_materia(nome):
     return EDITAL_CFO[nome][3] if nome in EDITAL_CFO else "Média"
 
+# -----------------------------------------------------------------------------
+# NOVO: CRONÔMETRO DE TEMPO LÍQUIDO (Iniciar / Pausar / Finalizar)
+# Conta para cima; as pausas não entram. O estado fica no banco (e na nuvem),
+# então o tempo continua certo mesmo se a tela do celular apagar ou a página recarregar.
+# -----------------------------------------------------------------------------
+LIMITE_SEM_PAUSA_SEG = 4 * 3600  # aviso: mais de 4 h seguidas sem pausar
+
+def fmt_hms(seg):
+    seg = max(0, int(seg))
+    return f"{seg // 3600:02d}:{(seg % 3600) // 60:02d}:{seg % 60:02d}"
+
+def fmt_horas(minutos):
+    minutos = int(minutos or 0)
+    return f"{minutos // 60}h{minutos % 60:02d}" if minutos >= 60 else f"{minutos} min"
+
+def cron_estado(conn, topico_id):
+    r = conn.execute("SELECT status, inicio_trecho, acumulado, pausas FROM cronometro_bloco WHERE topico_id = ?",
+                     (int(topico_id),)).fetchone()
+    if not r:
+        return {"status": "PARADO", "segundos": 0, "pausas": 0, "trecho": 0}
+    status, inicio, acumulado, pausas = r
+    trecho = max(0.0, time.time() - inicio) if status == "RODANDO" and inicio else 0.0
+    return {"status": status, "segundos": int((acumulado or 0) + trecho), "pausas": int(pausas or 0), "trecho": int(trecho)}
+
+def cron_pausar(conn, topico_id, contar_pausa=True):
+    est = cron_estado(conn, topico_id)
+    if est["status"] != "RODANDO":
+        return
+    conn.execute("UPDATE cronometro_bloco SET status = 'PAUSADO', inicio_trecho = NULL, acumulado = ?, pausas = pausas + ? "
+                 "WHERE topico_id = ?", (est["segundos"], 1 if contar_pausa else 0, int(topico_id)))
+    conn.commit()
+
+def cron_iniciar(conn, topico_id):
+    # Só um cronômetro rodando por vez: se outro bloco estava rodando, ele é pausado.
+    for (outro,) in conn.execute("SELECT topico_id FROM cronometro_bloco WHERE status = 'RODANDO' AND topico_id != ?",
+                                 (int(topico_id),)).fetchall():
+        cron_pausar(conn, outro)
+    est = cron_estado(conn, topico_id)
+    if est["status"] == "RODANDO":
+        return
+    if est["status"] == "PARADO":
+        conn.execute("INSERT OR REPLACE INTO cronometro_bloco (topico_id, status, inicio_trecho, acumulado, pausas, iniciado_em) "
+                     "VALUES (?, 'RODANDO', ?, 0, 0, ?)", (int(topico_id), time.time(), agora().isoformat(timespec="minutes")))
+    else:
+        conn.execute("UPDATE cronometro_bloco SET status = 'RODANDO', inicio_trecho = ? WHERE topico_id = ?",
+                     (time.time(), int(topico_id)))
+    conn.commit()
+
+def cron_descartar(conn, topico_id):
+    conn.execute("DELETE FROM cronometro_bloco WHERE topico_id = ?", (int(topico_id),))
+    conn.commit()
+
+def registrar_sessao(conn, objetivo, materia, topico_id, minutos, pausas=0, inicio=None, origem="cronômetro"):
+    if int(minutos) <= 0:
+        return
+    conn.execute("""INSERT INTO sessoes_estudo (data, objetivo, materia, topico_id, minutos, pausas, inicio, fim, origem)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                 (hoje().isoformat(), objetivo, materia, int(topico_id), int(minutos), int(pausas), inicio,
+                  agora().isoformat(timespec="minutes"), origem))
+    conn.commit()
+
+def tempo_estudado(conn, objetivo):
+    """Minutos líquidos estudados hoje e nesta semana (segunda a domingo)."""
+    d = hoje()
+    seg = d - datetime.timedelta(days=d.weekday())
+    m_hoje = conn.execute("SELECT COALESCE(SUM(minutos), 0) FROM sessoes_estudo WHERE objetivo = ? AND data = ?",
+                          (objetivo, d.isoformat())).fetchone()[0]
+    m_sem = conn.execute("SELECT COALESCE(SUM(minutos), 0) FROM sessoes_estudo WHERE objetivo = ? AND data >= ? AND data <= ?",
+                         (objetivo, seg.isoformat(), d.isoformat())).fetchone()[0]
+    return int(m_hoje), int(m_sem)
+
+def _relogio_bloco(topico_id, minutos_plan):
+    """Mostrador do cronômetro. Quando está rodando, só este pedaço da tela se atualiza a cada segundo."""
+    con = get_db()
+    est = cron_estado(con, topico_id)
+    con.close()
+    seg, meta = est["segundos"], minutos_plan * 60
+    st.markdown(f"### ⏱️ `{fmt_hms(seg)}`")
+    st.markdown("🟢 **Estudando** · o tempo está contando" if est["status"] == "RODANDO"
+                else "⏸️ **Pausado** · o tempo parado não conta")
+    if meta > 0:
+        st.progress(min(1.0, seg / meta))
+        if seg >= meta:
+            st.success(f"🔔 Tempo previsto atingido! Você já está {fmt_hms(seg - meta)} além dos {minutos_plan} min. "
+                       "Pode continuar: o tempo extra também é registrado.")
+        else:
+            st.caption(f"Previsto: {minutos_plan} min · faltam {fmt_hms(meta - seg)} · pausas: {est['pausas']} (não contam)")
+    if est["status"] == "RODANDO" and est["trecho"] > LIMITE_SEM_PAUSA_SEG:
+        st.warning("⚠️ O cronômetro está rodando há mais de 4 horas sem pausa. Se esqueceu ligado, "
+                   "toque em ⏹️ Finalizar e corrija os minutos antes de salvar.")
+
+def finalizar_bloco(conn, row, objetivo, status, minutos, itens_ids, prefixo):
+    topico_id = int(row['id'])
+    est = cron_estado(conn, topico_id)
+    inicio = conn.execute("SELECT iniciado_em FROM cronometro_bloco WHERE topico_id = ?", (topico_id,)).fetchone()
+    salvar_status_topico(conn, topico_id, status, int(row['minutos_estudados'] or 0) + int(minutos))
+    marcar_teoria_itens(conn, itens_ids)
+    registrar_sessao(conn, objetivo, row['materia'], topico_id, minutos, est["pausas"], inicio[0] if inicio else None)
+    cron_descartar(conn, topico_id)
+    st.session_state.pop(f"{prefixo}_fin_{topico_id}", None)
+    st.toast(f"Registrado: {fmt_horas(minutos)} de estudo líquido.")
+
 def mostrar_bloco(conn, row, objetivo, prefixo, data_bloco=None):
-    """Mostra um bloco do cronograma com cronômetro. Devolve True se o cronômetro estiver rodando."""
+    """Mostra um bloco do cronograma com o cronômetro de tempo líquido (Iniciar / Pausar / Finalizar)."""
     topico_id = int(row['id'])
     minutos_plan = int(row['minutos_planejados'] or 0)
     icones = {"Concluído": "✅", "Parcial": "⏳", "Adiado": "📌"}
     icone = icones.get(row['status'], "📖")
     quando = f" · de {DIAS_SEMANA[data_bloco.weekday()][:3]} {data_bloco:%d/%m}" if data_bloco is not None else ""
-    rodando = False
-    with st.expander(f"{icone} **{row['bloco']} · {row['materia']}** | {minutos_plan} min{quando}", expanded=row['status'] != "Concluído"):
+    est = cron_estado(conn, topico_id)
+    chave_fin = f"{prefixo}_fin_{topico_id}"
+    ativo = est["status"] != "PARADO"
+    aberto = row['status'] != "Concluído" or ativo
+    with st.expander(f"{icone} **{row['bloco']} · {row['materia']}** | {minutos_plan} min{quando}", expanded=aberto):
         st.markdown(f"**Conteúdo:** {row['nome'].split(' · ', 1)[-1]}")
         st.write(f"**Status:** `{row['status']}` · **Minutos registrados:** {int(row['minutos_estudados'] or 0)}")
 
-        timer_data = get_timer_state(topico_id, minutos_plan * 60)
-        seg_restantes = timer_data['restante']
-        if timer_data['status'] == 'FINISHED':
-            st.success("🔔 Tempo do bloco concluído!")
-        st.markdown(f"### ⏳ `{seg_restantes // 3600:02d}:{(seg_restantes % 3600) // 60:02d}:{seg_restantes % 60:02d}`")
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            if st.button("▶️ Iniciar / Continuar", key=f"{prefixo}_start_{topico_id}"):
-                set_timer_start(topico_id, seg_restantes)
+        finalizando = ativo and st.session_state.get(chave_fin, False)
+        if not ativo:
+            st.caption("⏱️ Toque em **▶️ Iniciar** quando começar. Se precisar parar, use **⏸️ Pausar**; "
+                       "no fim, **⏹️ Finalizar**. Só o tempo líquido (sem as pausas) vai para as estatísticas.")
+            if st.button("▶️ Iniciar", key=f"{prefixo}_start_{topico_id}", type="primary"):
+                cron_iniciar(conn, topico_id)
                 st.rerun()
-        with c2:
-            if st.button("⏸️ Pausar", key=f"{prefixo}_pause_{topico_id}"):
-                set_timer_pause(topico_id, seg_restantes)
-                st.rerun()
-        with c3:
-            if st.button("🔄 Zerar", key=f"{prefixo}_reset_{topico_id}"):
-                set_timer_stop(topico_id)
-                st.rerun()
+        else:
+            if est["status"] == "RODANDO":
+                st.fragment(run_every=1)(_relogio_bloco)(topico_id, minutos_plan)
+            else:
+                _relogio_bloco(topico_id, minutos_plan)
+            if not finalizando:
+                c1, c2 = st.columns(2)
+                with c1:
+                    if est["status"] == "RODANDO":
+                        if st.button("⏸️ Pausar", key=f"{prefixo}_pause_{topico_id}"):
+                            cron_pausar(conn, topico_id)
+                            st.rerun()
+                    else:
+                        if st.button("▶️ Continuar", key=f"{prefixo}_start_{topico_id}", type="primary"):
+                            cron_iniciar(conn, topico_id)
+                            st.rerun()
+                with c2:
+                    if st.button("⏹️ Finalizar", key=f"{prefixo}_stop_{topico_id}"):
+                        cron_pausar(conn, topico_id, contar_pausa=False)
+                        st.session_state[chave_fin] = True
+                        st.rerun()
 
         # Itens do edital desta matéria: o que você marcar aqui entra no checklist e nas revisões
         itens_ids = []
@@ -1247,27 +1384,119 @@ def mostrar_bloco(conn, row, objetivo, prefixo, data_bloco=None):
                                        format_func=lambda i: rotulos[i], key=f"{prefixo}_itens_{topico_id}",
                                        placeholder="Escolha os itens do edital")
 
-        minutos_cronometrados = max(0, round((minutos_plan * 60 - seg_restantes) / 60)) if timer_data['status'] != 'STOPPED' else 0
         minutos_ja = int(row['minutos_estudados'] or 0)
-        col_a, col_b = st.columns(2)
-        with col_a:
-            if st.button("✅ Concluí este bloco", key=f"{prefixo}_conc_{topico_id}"):
-                if minutos_cronometrados > 0:
-                    minutos = minutos_ja + minutos_cronometrados
-                else:
+        if finalizando:
+            seg = est["segundos"]
+            liquido = min(600, round(seg / 60))
+            with st.container(border=True):
+                st.markdown(f"**⏹️ Cronômetro parado.** Tempo líquido: **{fmt_hms(seg)}** "
+                            f"({est['pausas']} pausa(s), que não contam).")
+                minutos = st.number_input("Minutos que vão para as estatísticas (corrija se esqueceu o cronômetro ligado):",
+                                          min_value=0, max_value=600, value=int(liquido), step=1,
+                                          key=f"{prefixo}_min_{topico_id}")
+                st.write("Como foi o bloco?")
+                f1, f2 = st.columns(2)
+                with f1:
+                    if st.button("✅ Concluí o bloco", key=f"{prefixo}_conc_{topico_id}", type="primary"):
+                        finalizar_bloco(conn, row, objetivo, "Concluído", minutos, itens_ids, prefixo)
+                        st.rerun()
+                with f2:
+                    if st.button("⏳ Fiz só uma parte", key=f"{prefixo}_parc_{topico_id}"):
+                        finalizar_bloco(conn, row, objetivo, "Parcial", minutos, itens_ids, prefixo)
+                        st.rerun()
+                g1, g2 = st.columns(2)
+                with g1:
+                    if st.button("↩️ Voltar a estudar", key=f"{prefixo}_volta_{topico_id}"):
+                        st.session_state.pop(chave_fin, None)
+                        cron_iniciar(conn, topico_id)
+                        st.rerun()
+                with g2:
+                    if st.checkbox("Quero descartar este tempo", key=f"{prefixo}_confdesc_{topico_id}"):
+                        if st.button("🗑️ Descartar", key=f"{prefixo}_desc_{topico_id}"):
+                            cron_descartar(conn, topico_id)
+                            st.session_state.pop(chave_fin, None)
+                            st.rerun()
+        elif ativo:
+            st.caption("Quando terminar, toque em **⏹️ Finalizar** para registrar o tempo e dizer como foi o bloco.")
+        else:
+            st.caption("Estudou sem o cronômetro? Use os botões abaixo: o app registra o tempo previsto do bloco.")
+            col_a, col_b = st.columns(2)
+            with col_a:
+                if st.button("✅ Concluí este bloco", key=f"{prefixo}_conc_{topico_id}"):
                     minutos = minutos_ja if minutos_ja > 0 else minutos_plan
-                salvar_status_topico(conn, topico_id, "Concluído", minutos)
-                marcar_teoria_itens(conn, itens_ids)
-                set_timer_stop(topico_id)
+                    salvar_status_topico(conn, topico_id, "Concluído", minutos)
+                    marcar_teoria_itens(conn, itens_ids)
+                    registrar_sessao(conn, objetivo, row['materia'], topico_id, minutos - minutos_ja, origem="manual")
+                    st.rerun()
+            with col_b:
+                if st.button("⏳ Fiz só uma parte", key=f"{prefixo}_parc_{topico_id}"):
+                    salvar_status_topico(conn, topico_id, "Parcial", minutos_ja)
+                    marcar_teoria_itens(conn, itens_ids)
+                    st.rerun()
+    return False
+
+ID_CRONO_REVISOES = -1          # o cronômetro da sessão de revisões usa este número no lugar de um bloco
+MATERIA_REVISOES = "🔁 Revisões"
+
+def mostrar_cronometro_revisoes(conn, objetivo, minutos_previstos):
+    """Um cronômetro só para a sessão de revisões do dia (Iniciar / Pausar / Finalizar)."""
+    est = cron_estado(conn, ID_CRONO_REVISOES)
+    chave_fin = "rev_crono_fin"
+    ativo = est["status"] != "PARADO"
+    with st.container(border=True):
+        if not ativo:
+            st.caption("⏱️ Toque em **▶️ Iniciar revisões** antes da primeira e faça todas com o cronômetro rodando. "
+                       "Continue marcando cada item pelo resultado. No fim, **⏹️ Finalizar**.")
+            if st.button("▶️ Iniciar revisões", key="rev_crono_start", type="primary"):
+                cron_iniciar(conn, ID_CRONO_REVISOES)
                 st.rerun()
-        with col_b:
-            if st.button("⏳ Fiz só uma parte", key=f"{prefixo}_parc_{topico_id}"):
-                salvar_status_topico(conn, topico_id, "Parcial", minutos_ja + minutos_cronometrados)
-                marcar_teoria_itens(conn, itens_ids)
-                set_timer_stop(topico_id)
+            return
+        if est["status"] == "RODANDO":
+            st.fragment(run_every=1)(_relogio_bloco)(ID_CRONO_REVISOES, minutos_previstos)
+        else:
+            _relogio_bloco(ID_CRONO_REVISOES, minutos_previstos)
+        if not st.session_state.get(chave_fin, False):
+            c1, c2 = st.columns(2)
+            with c1:
+                if est["status"] == "RODANDO":
+                    if st.button("⏸️ Pausar", key="rev_crono_pause"):
+                        cron_pausar(conn, ID_CRONO_REVISOES)
+                        st.rerun()
+                elif st.button("▶️ Continuar", key="rev_crono_start", type="primary"):
+                    cron_iniciar(conn, ID_CRONO_REVISOES)
+                    st.rerun()
+            with c2:
+                if st.button("⏹️ Finalizar", key="rev_crono_stop"):
+                    cron_pausar(conn, ID_CRONO_REVISOES, contar_pausa=False)
+                    st.session_state[chave_fin] = True
+                    st.rerun()
+            return
+        seg = est["segundos"]
+        st.markdown(f"**⏹️ Revisões encerradas.** Tempo líquido: **{fmt_hms(seg)}** ({est['pausas']} pausa(s), que não contam).")
+        minutos = st.number_input("Minutos que vão para as estatísticas (corrija se esqueceu o cronômetro ligado):",
+                                  min_value=0, max_value=600, value=int(min(600, round(seg / 60))), step=1,
+                                  key="rev_crono_min")
+        f1, f2 = st.columns(2)
+        with f1:
+            if st.button("💾 Salvar o tempo", key="rev_crono_salvar", type="primary"):
+                inicio = conn.execute("SELECT iniciado_em FROM cronometro_bloco WHERE topico_id = ?",
+                                      (ID_CRONO_REVISOES,)).fetchone()
+                registrar_sessao(conn, objetivo, MATERIA_REVISOES, ID_CRONO_REVISOES, minutos, est["pausas"],
+                                 inicio[0] if inicio else None, origem="revisões")
+                cron_descartar(conn, ID_CRONO_REVISOES)
+                st.session_state.pop(chave_fin, None)
+                st.toast(f"Registrado: {fmt_horas(minutos)} de revisão.")
                 st.rerun()
-        rodando = timer_data['status'] == 'RODANDO'
-    return rodando
+        with f2:
+            if st.button("↩️ Voltar a revisar", key="rev_crono_volta"):
+                st.session_state.pop(chave_fin, None)
+                cron_iniciar(conn, ID_CRONO_REVISOES)
+                st.rerun()
+        if st.checkbox("Quero descartar este tempo", key="rev_crono_confdesc"):
+            if st.button("🗑️ Descartar", key="rev_crono_desc"):
+                cron_descartar(conn, ID_CRONO_REVISOES)
+                st.session_state.pop(chave_fin, None)
+                st.rerun()
 
 def mostrar_revisoes_do_dia(conn, objetivo, fim_de_semana=False):
     df = pd.read_sql_query("""SELECT id, materia, item, prioridade, n_revisoes, proxima_revisao FROM edital_itens
@@ -1275,6 +1504,10 @@ def mostrar_revisoes_do_dia(conn, objetivo, fim_de_semana=False):
                            conn, params=(objetivo, hoje().isoformat()))
     df = filtrar_idioma(df)
     if df.empty:
+        if cron_estado(conn, ID_CRONO_REVISOES)["status"] != "PARADO":
+            st.subheader("🔁 Revisões de hoje: todas feitas ✅")
+            mostrar_cronometro_revisoes(conn, objetivo, 0)
+            st.markdown("---")
         return
     # Ordem: mais atrasadas primeiro; no empate, maior prioridade
     df["ordem_prio"] = df["prioridade"].map({"Alta": 0, "Média": 1, "Baixa": 2}).fillna(1)
@@ -1289,6 +1522,7 @@ def mostrar_revisoes_do_dia(conn, objetivo, fim_de_semana=False):
     st.caption(f"Seu tempo de revisão {'no fim de semana' if fim_de_semana else 'por dia'} é de {limite} min "
                "(altere em '⚙️ Gerenciador' → '⚙️ Disp. de Tempo'). As mais atrasadas e as de maior prioridade vêm primeiro. "
                "No fim de cada revisão, diga o quanto você lembrou: o app ajusta a próxima data.")
+    mostrar_cronometro_revisoes(conn, objetivo, int(cabem['min'].sum()))
     for _, r in cabem.iterrows():
         etapa = etapa_revisao(r["n_revisoes"])
         data_prev = datetime.date.fromisoformat(r["proxima_revisao"])
@@ -1353,6 +1587,12 @@ def mostrar_rotina_cronograma(conn, meta_id, objetivo):
     inicio_rot = datetime.date.fromisoformat(get_config(f"cronograma_inicio_{meta_id}", CRONO_INICIO.isoformat()))
     d_hoje = hoje()
     algum_rodando = False
+
+    # NOVO: tempo líquido registrado pelo cronômetro
+    min_hoje, min_semana = tempo_estudado(conn, objetivo)
+    t1, t2 = st.columns(2)
+    t1.metric("⏱️ Estudado hoje", fmt_horas(min_hoje))
+    t2.metric("📅 Nesta semana", fmt_horas(min_semana))
 
     mostrar_revisoes_do_dia(conn, objetivo, fim_de_semana=dia_hoje > 4)
 
@@ -1424,9 +1664,6 @@ def mostrar_rotina_cronograma(conn, meta_id, objetivo):
     elif dia_hoje > 4 and 1 <= semana_hoje <= n_semanas:
         st.success("🎉 Nada atrasado. Aproveite o fim de semana para descansar ou para fazer questões.")
 
-    if algum_rodando:
-        time.sleep(1)
-        st.rerun()
 
 # -----------------------------------------------------------------------------
 # INTERFACE PRINCIPAL
@@ -2320,6 +2557,33 @@ elif menu == "📊 Dashboard de Evolução":
                         """, conn, params=(int(m_id),))
                         st.markdown("**% de blocos concluídos por semana**")
                         st.bar_chart(df_s.set_index('Semana'))
+
+                    # NOVO: tempo líquido do cronômetro, pelo dia em que você estudou de verdade
+                    desde = hoje() - datetime.timedelta(days=13)
+                    df_t = pd.read_sql_query("""SELECT data, materia, SUM(minutos) as minutos FROM sessoes_estudo
+                                                 WHERE objetivo = ? AND data >= ? GROUP BY data, materia""",
+                                              conn, params=(row_meta['nome'], desde.isoformat()))
+                    st.subheader("⏱️ Tempo líquido estudado (últimos 14 dias)")
+                    if df_t.empty:
+                        st.info("Ainda não há tempo registrado. Use ▶️ Iniciar / ⏸️ Pausar / ⏹️ Finalizar nos blocos de "
+                                "'📅 Meta & Rotina do Dia'.")
+                    else:
+                        dias = [desde + datetime.timedelta(days=i) for i in range(14)]
+                        por_dia = df_t.groupby("data")["minutos"].sum()
+                        df_dia = pd.DataFrame({"Dia": pd.to_datetime([d.isoformat() for d in dias]),
+                                               "Horas": [round(por_dia.get(d.isoformat(), 0) / 60, 2) for d in dias]})
+                        tot14 = int(df_t["minutos"].sum())
+                        tot_rev = int(df_t.loc[df_t["materia"] == MATERIA_REVISOES, "minutos"].sum())
+                        k1, k2, k3 = st.columns(3)
+                        k1.metric("Total em 14 dias", fmt_horas(tot14))
+                        k2.metric("Média por dia", fmt_horas(round(tot14 / 14)))
+                        k3.metric("Em revisões", fmt_horas(tot_rev), f"{100 * tot_rev / tot14:.0f}% do tempo" if tot14 else None,
+                                  delta_color="off")
+                        st.bar_chart(df_dia.set_index("Dia"), y="Horas")
+                        df_mt = (df_t.groupby("materia")["minutos"].sum().sort_values(ascending=False)
+                                 .reset_index().rename(columns={"materia": "Matéria", "minutos": "Minutos"}))
+                        df_mt["Tempo"] = df_mt["Minutos"].apply(fmt_horas)
+                        st.dataframe(df_mt[["Matéria", "Tempo"]], width="stretch", hide_index=True)
 
 # =============================================================================
 # MENU 5: GERENCIADOR

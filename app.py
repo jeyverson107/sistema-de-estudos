@@ -54,6 +54,12 @@ def init_db():
                     chave TEXT PRIMARY KEY,
                     valor TEXT
                 )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS orientacoes (
+                    materia TEXT,
+                    topico TEXT,
+                    texto TEXT,
+                    PRIMARY KEY (materia, topico)
+                )''')
     c.execute('''CREATE TABLE IF NOT EXISTS editais (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     nome TEXT UNIQUE,
@@ -702,6 +708,162 @@ def distribuir_questoes(materias, pesos, total):
         sobra += 1
     return base
 
+# -----------------------------------------------------------------------------
+# NOVO: ORIENTAÇÕES DE ESTUDO POR BLOCO (artigos, foco e divisão do tempo)
+# -----------------------------------------------------------------------------
+def topico_sem_prefixo(nome):
+    return str(nome).split(" · ", 1)[-1].strip()
+
+def buscar_orientacao(conn, materia, nome_topico):
+    """Procura a orientação do bloco: primeiro pelo tópico exato, depois pelo assunto 'limpo'."""
+    c = conn.cursor()
+    exato = topico_sem_prefixo(nome_topico)
+    c.execute("SELECT texto FROM orientacoes WHERE materia = ? AND topico = ?", (materia, exato))
+    res = c.fetchone()
+    if res:
+        return res[0]
+    limpo = limpar_nome_topico(nome_topico)
+    c.execute("SELECT topico, texto FROM orientacoes WHERE materia = ?", (materia,))
+    for top, txt in c.fetchall():
+        if limpar_nome_topico(top) == limpo:
+            return txt
+    return ""
+
+def salvar_orientacao(conn, materia, topico, texto):
+    c = conn.cursor()
+    if texto.strip():
+        c.execute("INSERT OR REPLACE INTO orientacoes (materia, topico, texto) VALUES (?, ?, ?)",
+                  (materia, topico_sem_prefixo(topico), texto.strip()))
+    else:
+        c.execute("DELETE FROM orientacoes WHERE materia = ? AND topico = ?", (materia, topico_sem_prefixo(topico)))
+    conn.commit()
+
+def ler_arquivo_orientacoes(dados):
+    """Confere o arquivo de orientações. Retorna (lista de (matéria, tópico, texto), erros)."""
+    itens, erros = [], []
+    lista = dados.get("orientacoes")
+    if not isinstance(lista, list) or not lista:
+        return [], ["Falta a lista 'orientacoes'."]
+    for n, o in enumerate(lista, start=1):
+        try:
+            mat, top, txt = str(o["materia"]).strip(), str(o["topico"]).strip(), str(o["texto"]).strip()
+        except (KeyError, TypeError):
+            erros.append(f"Orientação nº {n}: falta matéria, tópico ou texto.")
+            continue
+        if not (mat and top and txt):
+            erros.append(f"Orientação nº {n}: matéria, tópico ou texto vazio.")
+            continue
+        itens.append((mat, topico_sem_prefixo(top), txt))
+    return (itens, []) if not erros else ([], erros[:10])
+
+# -----------------------------------------------------------------------------
+# NOVO: ASSISTENTE GEMINI (plano gratuito da API do Google)
+# -----------------------------------------------------------------------------
+def chave_gemini():
+    """Lê a chave dos 'Secrets' do Streamlit; se não houver, usa a digitada nesta sessão."""
+    try:
+        chave = st.secrets.get("GEMINI_API_KEY", "")
+    except Exception:
+        chave = ""
+    return chave or st.session_state.get("gemini_chave_digitada", "")
+
+def modelos_gemini(chave):
+    """Lista os modelos de texto disponíveis para a chave, com os 'Flash' mais novos primeiro."""
+    from google import genai
+    cliente = genai.Client(api_key=chave)
+    nomes = []
+    for m in cliente.models.list():
+        acoes = getattr(m, "supported_actions", None) or []
+        nome = (m.name or "").replace("models/", "")
+        if "generateContent" not in acoes:
+            continue
+        if any(x in nome for x in ("tts", "live", "image", "embedding", "audio", "transcribe", "translate", "robotics")):
+            continue
+        nomes.append(nome)
+    def ordem(n):
+        return (0 if "flash" in n and "lite" not in n else 1 if "pro" in n else 2, n)
+    nomes = sorted(set(nomes), key=ordem)
+    flash = [n for n in nomes if "flash" in n and "lite" not in n]
+    flash.sort(reverse=True)
+    return flash + [n for n in nomes if n not in flash]
+
+def gemini_json(chave, modelo, instrucao, pdfs=None):
+    """Envia a instrução (e os PDFs) ao Gemini e devolve o JSON da resposta já convertido em dicionário."""
+    import json as _json
+    from google import genai
+    from google.genai import types
+    cliente = genai.Client(api_key=chave)
+    partes = [types.Part.from_bytes(data=b, mime_type="application/pdf") for b in (pdfs or [])]
+    partes.append(instrucao)
+    resp = cliente.models.generate_content(
+        model=modelo, contents=partes,
+        config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.2))
+    texto = (resp.text or "").strip()
+    if texto.startswith("```"):
+        texto = texto.strip("`")
+        texto = texto[texto.find("{"):]
+    return _json.loads(texto)
+
+def explicar_erro_gemini(e):
+    msg = str(e)
+    if "429" in msg or "RESOURCE_EXHAUSTED" in msg or "quota" in msg.lower():
+        return "O limite do plano gratuito foi atingido. Espere 1 ou 2 minutos e tente de novo (ou tente amanhã, se for o limite diário)."
+    if "API_KEY" in msg.upper() or "401" in msg or "403" in msg or "PERMISSION" in msg.upper():
+        return "A chave do Gemini foi recusada. Confira se copiou a chave inteira em 'Secrets' do Streamlit."
+    if "404" in msg or "not found" in msg.lower():
+        return "Esse modelo não está disponível para a sua chave. Escolha outro modelo na lista."
+    if isinstance(e, ValueError):
+        return "O Gemini respondeu num formato inesperado. Tente de novo; se repetir, troque o modelo."
+    return f"Não foi possível falar com o Gemini: {msg[:300]}"
+
+INSTRUCAO_EDITAL = """Você é um especialista em concursos públicos no Brasil. Leia o edital em PDF anexado e extraia
+o conteúdo programático APENAS do cargo: "{cargo}".
+
+Responda SOMENTE com um JSON neste formato:
+{{
+  "versao": 2,
+  "objetivo": "{objetivo}",
+  "tipo": "Concurso",
+  "banca": "nome da banca organizadora",
+  "data_prova": "AAAA-MM-DD",
+  "materias": [
+    {{"nome": "Nome da disciplina", "bloco": "Bloco I", "questoes": 5, "pontos": 5,
+      "prioridade": "Alta", "topicos": [{{"nome": "tópico do edital", "prioridade": "Média"}}]}},
+    {{"nome": "Redação", "bloco": "Redação", "pontos": 30, "prioridade": "Alta", "tipo": "redacao", "topicos": []}}
+  ]
+}}
+
+Regras:
+- Use os nomes das disciplinas e dos tópicos como estão no edital (pode encurtar tópicos longos, sem mudar o sentido).
+- "questoes" e "pontos": tire do quadro de provas do cargo. Se a disciplina tiver peso, pontos = questões x peso.
+- "data_prova": a data prevista no cronograma do edital. Se não houver, use "{data_padrao}".
+- "prioridade" da disciplina: "Alta" para as de maior número de pontos e as usadas no desempate; "Baixa" para as de poucas
+  questões e programa extenso; "Média" para as demais.
+- "prioridade" do tópico: "Alta" para temas centrais da disciplina e mais cobrados em provas; "Baixa" para temas periféricos.
+- Tópicos em ordem lógica de estudo. Toda disciplina, exceto a redação, precisa de pelo menos um tópico.
+- Se houver prova discursiva ou redação, inclua como matéria com "tipo": "redacao" e "topicos": [].
+- Não invente disciplinas nem tópicos que não estejam no edital."""
+
+INSTRUCAO_ORIENTACOES = """Você é um professor de cursinho para concursos, especialista na banca {banca}.
+Prepare orientações de estudo para cada bloco listado abaixo, do concurso "{objetivo}".
+
+Cada orientação deve dizer, em português do Brasil e em até 6 linhas:
+- quais artigos (da lei) ou itens (da teoria) estudar, com os números exatos;
+- o que priorizar, pensando no que a banca mais cobra;
+- como dividir o tempo do bloco (os minutos estão indicados).
+
+Regras importantes:
+- Se textos de lei foram anexados em PDF, tire os números dos artigos SOMENTE desses textos.
+- Se não tiver certeza do número de um artigo, NÃO invente: indique o tema e escreva "confira os artigos no texto da lei".
+- Blocos de lei seca: diga quais artigos reler. Blocos de revisão ou caderno de erros: orientação curta e prática.
+- Use Markdown simples (negrito e listas com "-").
+
+Responda SOMENTE com um JSON neste formato, usando exatamente a matéria e o tópico de cada bloco:
+{{"orientacoes": [{{"materia": "...", "topico": "...", "texto": "..."}}]}}
+
+Blocos:
+{blocos}"""
+
 def total_semanas(meta_id, conn):
     c = conn.cursor()
     c.execute("""SELECT MAX(t.semana) FROM topicos t JOIN materias m ON t.materia_id = m.id
@@ -744,6 +906,7 @@ menu = st.sidebar.radio("Navegação", [
     "🗓️ Cronograma Semanal",
     "📋 Checklist & Acompanhamento",
     "🎯 Simulado do que já estudei",
+    "🤖 Assistente Gemini",
     "📝 Registrar Questões", 
     "📊 Dashboard de Evolução", 
     "⚙️ Gerenciador"
@@ -812,6 +975,15 @@ if menu == "📅 Meta & Rotina do Dia":
                         icone = "✅" if row['status'] == "Concluído" else ("⏳" if row['status'] == "Parcial" else "📖")
                         with st.expander(f"{icone} **{row['bloco']} · {row['materia']}** | {minutos_plan} min", expanded=row['status'] != "Concluído"):
                             st.markdown(f"**Conteúdo:** {row['nome'].split(' · ', 1)[-1]}")
+                            orientacao = buscar_orientacao(conn, row['materia'], row['nome'])
+                            if orientacao:
+                                st.info("📌 **Orientação**\n\n" + orientacao)
+                            if st.toggle("✏️ Escrever ou editar a orientação", key=f"ori_tg_{topico_id}"):
+                                novo_txt = st.text_area("Orientação", value=orientacao, height=150,
+                                                        key=f"ori_{topico_id}", label_visibility="collapsed")
+                                if st.button("💾 Salvar orientação", key=f"ori_salvar_{topico_id}"):
+                                    salvar_orientacao(conn, row['materia'], row['nome'], novo_txt)
+                                    st.rerun()
                             st.write(f"**Status:** `{row['status']}` · **Minutos registrados:** {int(row['minutos_estudados'] or 0)}")
 
                             timer_data = get_timer_state(topico_id, minutos_plan * 60)
@@ -1144,6 +1316,38 @@ elif menu == "🗓️ Cronograma Semanal":
                     salvar_status_topico(conn, row['id'], row['Status'], int(row['Estudado_min'] or 0))
                 st.success("Semana salva! O Dashboard e o Checklist já foram atualizados.")
                 st.rerun()
+            
+            st.markdown("---")
+            st.subheader("📌 Pedir orientações desta semana ao Claude")
+            df_ped = pd.read_sql_query("""
+                SELECT m.nome as materia, t.nome as topico, t.dia, t.bloco, t.minutos_planejados
+                FROM topicos t JOIN materias m ON t.materia_id = m.id
+                WHERE m.meta_id = ? AND t.semana = ? ORDER BY t.dia, t.ordem
+            """, conn, params=(meta_id_cr, int(semana_sel)))
+            vistos, linhas_ped, ja_tem = set(), [], 0
+            for _, r in df_ped.iterrows():
+                chave = (r["materia"], topico_sem_prefixo(r["topico"]))
+                if chave in vistos:
+                    continue
+                vistos.add(chave)
+                if buscar_orientacao(conn, r["materia"], r["topico"]):
+                    ja_tem += 1
+                    continue
+                linhas_ped.append(f'- {DIAS_SEMANA[int(r["dia"])]} · {r["bloco"]} ({int(r["minutos_planejados"] or 0)} min) · '
+                                  f'materia: "{chave[0]}" · topico: "{chave[1]}"')
+            if not linhas_ped:
+                st.success("Todos os blocos desta semana já têm orientação.")
+            else:
+                st.caption(f"{len(linhas_ped)} blocos sem orientação ({ja_tem} já têm). Copie o pedido e cole na conversa com o Claude.")
+                pedido_or = "\n".join([
+                    f"PEDIDO DE ORIENTAÇÕES – {meta_sel_cr} – semana {semana_sel}",
+                    "",
+                    "Claude, prepare as orientações de estudo destes blocos (quais artigos ou itens estudar, o que priorizar "
+                    "e como dividir o tempo do bloco), conferindo os artigos no texto atualizado da lei. Devolva um arquivo "
+                    ".json no formato de orientações do meu app, usando exatamente a matéria e o tópico abaixo:",
+                    "",
+                    *linhas_ped])
+                st.code(pedido_or, language=None)
 
 elif menu == "📋 Checklist & Acompanhamento":
     st.header("📋 Checklist de Conteúdos por Matéria")
@@ -1310,6 +1514,137 @@ elif menu == "🎯 Simulado do que já estudei":
             st.code(pedido, language=None)
             st.download_button("⬇️ Baixar o pedido (.txt)", data=pedido,
                                file_name=f"pedido_simulado_{datetime.date.today():%Y-%m-%d}.txt", mime="text/plain")
+
+elif menu == "🤖 Assistente Gemini":
+    import json as _json
+    st.header("🤖 Assistente Gemini")
+    chave = chave_gemini()
+    if not chave:
+        st.warning("O assistente precisa de uma chave da API do Gemini (gratuita).")
+        st.markdown("1. Abra **aistudio.google.com/apikey** e entre com sua conta Gmail.\n"
+                    "2. Toque em **Create API key** e copie a chave.\n"
+                    "3. No Streamlit: **Manage app → ⋮ → Settings → Secrets** e cole a linha:\n"
+                    "   `GEMINI_API_KEY = \"sua-chave-aqui\"`\n"
+                    "4. Salve. O app reinicia sozinho.")
+        digitada = st.text_input("Ou cole a chave aqui só para testar agora (não fica salva):", type="password")
+        if digitada:
+            st.session_state["gemini_chave_digitada"] = digitada.strip()
+            st.rerun()
+    else:
+        st.caption("Plano gratuito da API do Gemini: o Google pode usar o conteúdo enviado para melhorar os produtos dele. "
+                   "Envie apenas editais e leis (documentos públicos), nunca dados pessoais.")
+        try:
+            if "gemini_modelos" not in st.session_state:
+                st.session_state["gemini_modelos"] = modelos_gemini(chave)
+            lista_modelos = st.session_state["gemini_modelos"]
+        except Exception as e:
+            lista_modelos = []
+            st.error(explicar_erro_gemini(e))
+        if lista_modelos:
+            modelo = st.selectbox("Modelo do Gemini:", lista_modelos, index=0,
+                                  help="Os modelos 'Flash' são rápidos e entram no plano gratuito.")
+            aba_ed, aba_or = st.tabs(["📄 Ler edital", "📌 Orientações da semana"])
+            
+            with aba_ed:
+                st.write("Envie o PDF do edital. O Gemini extrai as matérias e os tópicos do seu cargo; "
+                         "você confere e salva. Depois é só ir em '🧭 Planejar Estudos'.")
+                pdf_ed = st.file_uploader("Edital (.pdf)", type=["pdf"], key="gem_pdf_edital")
+                cargo = st.text_input("Cargo exatamente como aparece no edital:", placeholder="Ex.: 2º Tenente QOC (CFO)")
+                objetivo_novo = st.text_input("Nome para este concurso no app:", placeholder="Ex.: CFO CBMPE 2027")
+                if st.button("🔎 Ler edital com o Gemini", type="primary", disabled=not (pdf_ed and cargo and objetivo_novo)):
+                    instr = INSTRUCAO_EDITAL.format(cargo=cargo.strip(), objetivo=objetivo_novo.strip(),
+                                                    data_padrao=(datetime.date.today() + datetime.timedelta(days=120)).isoformat())
+                    with st.spinner("O Gemini está lendo o edital. Pode levar até 1 minuto..."):
+                        try:
+                            bruto = gemini_json(chave, modelo, instr, [pdf_ed.getvalue()])
+                            bruto["objetivo"] = objetivo_novo.strip()
+                            st.session_state["gem_edital"] = bruto
+                        except Exception as e:
+                            st.error(explicar_erro_gemini(e))
+                if st.session_state.get("gem_edital"):
+                    edital_g, erros_g = ler_arquivo_edital(st.session_state["gem_edital"])
+                    if erros_g:
+                        st.error("A resposta veio incompleta. Tente de novo:")
+                        for e in erros_g:
+                            st.write(f"- {e}")
+                    else:
+                        st.success(f"Leitura concluída: **{edital_g['objetivo']}** · banca: {edital_g.get('banca') or 'não identificada'} · "
+                                   f"prova em {datetime.date.fromisoformat(edital_g['data_prova']):%d/%m/%Y}")
+                        st.warning("Confira com o edital antes de salvar: o Gemini pode errar números de questões, pontos ou a data.")
+                        st.dataframe(pd.DataFrame([{"Matéria": m["nome"], "Questões": m.get("questoes"), "Pontos": m["pontos"],
+                                                    "Prioridade": m["prioridade"], "Tópicos": len(m["topicos"])}
+                                                   for m in edital_g["materias"]]), use_container_width=True, hide_index=True)
+                        for m in edital_g["materias"]:
+                            if m["topicos"]:
+                                with st.expander(f"Tópicos de {m['nome']}"):
+                                    for t in m["topicos"]:
+                                        st.write(f"- {t['nome']} · prioridade {t['prioridade']}")
+                        if st.button("✅ Salvar este edital", key="gem_salvar_edital"):
+                            salvar_edital(conn, edital_g)
+                            st.session_state.pop("gem_edital", None)
+                            st.success("Edital salvo! Vá em '🧭 Planejar Estudos' para marcar seu conhecimento e gerar o cronograma.")
+            
+            with aba_or:
+                df_metas_g = pd.read_sql_query("SELECT id, nome FROM metas WHERE ativa = 1", conn)
+                metas_g = [r for _, r in df_metas_g.iterrows() if meta_tem_cronograma(r["id"], conn)]
+                if not metas_g:
+                    st.info("Carregue ou gere um cronograma primeiro.")
+                else:
+                    nome_g = st.selectbox("Cronograma:", [r["nome"] for r in metas_g], key="gem_meta")
+                    meta_g = int([r["id"] for r in metas_g if r["nome"] == nome_g][0])
+                    sem_hoje, dia_hoje = semana_e_dia_de_hoje(meta_g)
+                    n_sem_g = max(total_semanas(meta_g, conn), 1)
+                    padrao = sem_hoje + 1 if dia_hoje >= 4 else sem_hoje
+                    semana_g = st.number_input("Semana:", min_value=1, max_value=n_sem_g, value=min(max(padrao, 1), n_sem_g))
+                    refazer = st.checkbox("Refazer também os blocos que já têm orientação", value=False)
+                    leis = st.file_uploader("PDFs das leis desta semana (recomendado, para os artigos saírem certos):",
+                                            type=["pdf"], accept_multiple_files=True, key="gem_leis")
+                    df_b = pd.read_sql_query("""
+                        SELECT m.nome as materia, t.nome as topico, t.dia, t.bloco, t.minutos_planejados as minutos
+                        FROM topicos t JOIN materias m ON t.materia_id = m.id
+                        WHERE m.meta_id = ? AND t.semana = ? ORDER BY t.dia, t.ordem
+                    """, conn, params=(meta_g, int(semana_g)))
+                    vistos, blocos_txt = set(), []
+                    for _, r in df_b.iterrows():
+                        ch = (r["materia"], topico_sem_prefixo(r["topico"]))
+                        if ch in vistos:
+                            continue
+                        vistos.add(ch)
+                        if not refazer and buscar_orientacao(conn, r["materia"], r["topico"]):
+                            continue
+                        blocos_txt.append(f'- {DIAS_SEMANA[int(r["dia"])]}, {r["bloco"]}, {int(r["minutos"] or 0)} min · '
+                                          f'materia: "{ch[0]}" · topico: "{ch[1]}"')
+                    if not blocos_txt:
+                        st.success("Todos os blocos desta semana já têm orientação.")
+                    else:
+                        st.caption(f"{len(blocos_txt)} blocos vão receber orientação.")
+                        c = conn.cursor()
+                        c.execute("SELECT conteudo FROM editais WHERE nome = ?", (nome_g,))
+                        r_ed = c.fetchone()
+                        banca_g = (_json.loads(r_ed[0]).get("banca") if r_ed else "") or ("Instituto AOCP" if nome_g == CRONO_META_NOME else "do concurso")
+                        if st.button("✨ Gerar orientações com o Gemini", type="primary"):
+                            instr = INSTRUCAO_ORIENTACOES.format(banca=banca_g, objetivo=nome_g, blocos="\n".join(blocos_txt))
+                            pdfs = [f.getvalue() for f in (leis or [])]
+                            with st.spinner("O Gemini está preparando as orientações..."):
+                                try:
+                                    st.session_state["gem_orient"] = gemini_json(chave, modelo, instr, pdfs)
+                                except Exception as e:
+                                    st.error(explicar_erro_gemini(e))
+                    if st.session_state.get("gem_orient"):
+                        itens_g, erros_og = ler_arquivo_orientacoes(st.session_state["gem_orient"])
+                        if erros_og:
+                            st.error("A resposta veio incompleta. Tente de novo.")
+                        else:
+                            st.warning("Leia antes de salvar. Se algum artigo parecer errado, corrija depois "
+                                       "no botão ✏️ do bloco, em '📅 Meta & Rotina do Dia'.")
+                            for m_, t_, x_ in itens_g:
+                                with st.expander(f"{m_} · {t_}"):
+                                    st.markdown(x_)
+                            if st.button("✅ Salvar estas orientações", key="gem_salvar_or"):
+                                for m_, t_, x_ in itens_g:
+                                    salvar_orientacao(conn, m_, t_, x_)
+                                st.session_state.pop("gem_orient", None)
+                                st.success("Orientações salvas! Elas aparecem embaixo de cada bloco em '📅 Meta & Rotina do Dia'.")
 
 elif menu == "📝 Registrar Questões":
     st.header("📝 Registro de Desempenho em Exercícios")
@@ -1495,7 +1830,22 @@ elif menu == "⚙️ Gerenciador":
                 eh_edital = isinstance(_bruto, dict) and "materias" in _bruto
             except Exception:
                 _bruto = None
-        if arq_crono is not None and eh_edital:
+        eh_orient = arq_crono is not None and isinstance(_bruto, dict) and "orientacoes" in _bruto
+        if eh_orient:
+            itens_or, erros_or = ler_arquivo_orientacoes(_bruto)
+            if erros_or:
+                st.error("Não consegui ler as orientações. Problemas encontrados:")
+                for e in erros_or:
+                    st.write(f"- {e}")
+            else:
+                st.success(f"Arquivo de orientações conferido: {len(itens_or)} orientações.")
+                st.dataframe(pd.DataFrame([{"Matéria": m, "Tópico": t} for m, t, _ in itens_or]),
+                             use_container_width=True, hide_index=True)
+                if st.button("✅ Salvar estas orientações", type="primary"):
+                    for m, t, txt in itens_or:
+                        salvar_orientacao(conn, m, t, txt)
+                    st.success("Orientações salvas! Elas aparecem embaixo de cada bloco em '📅 Meta & Rotina do Dia'.")
+        elif arq_crono is not None and eh_edital:
             edital_lido, erros_ed = ler_arquivo_edital(_bruto)
             if erros_ed:
                 st.error("Não consegui ler o edital. Problemas encontrados:")

@@ -120,6 +120,14 @@ def init_db():
     colunas_orient = [col[1] for col in c.execute("PRAGMA table_info(orientacoes)").fetchall()]
     if "origem" not in colunas_orient:
         c.execute("ALTER TABLE orientacoes ADD COLUMN origem TEXT DEFAULT 'usuario'")
+    # Ajuste de títulos ao edital (só troca o nome; o progresso do bloco é mantido)
+    for antigo, novo in (("Estatuto (Lei 6.783): disposições gerais, hierarquia e disciplina",
+                          "Estatuto (Lei 6.783): hierarquia e disciplina"),
+                         ("70 questões em 3 h + redação em 1 h", "70 questões + redação em 5 h")):
+        c.execute("UPDATE topicos SET nome = REPLACE(nome, ?, ?) WHERE nome LIKE ?", (antigo, novo, f"%{antigo}%"))
+        c.execute("UPDATE OR IGNORE orientacoes SET topico = REPLACE(topico, ?, ?) WHERE topico LIKE ? AND origem = 'usuario'",
+                  (antigo, novo, f"%{antigo}%"))
+        c.execute("DELETE FROM orientacoes WHERE topico LIKE ? AND origem = 'padrao'", (f"%{antigo}%",))
     carregar_orientacoes_padrao(c)
 
     # Auto-correção para "portugês" -> "Português" no banco
@@ -268,7 +276,7 @@ PORT, RED, REV, SIM = "Língua Portuguesa", "Redação", "Revisão", "Simulados"
 MAPA_ROTATIVO = {"Est": "Estatística", "Mat": "Matemática", "Fís": "Física", "Quím": "Química",
                  "Bio": "Biologia", "Info": "Informática", "Inglês/Espanhol": "Língua Estrangeira"}
 
-_LEG = ["Estatuto (Lei 6.783): disposições gerais, hierarquia e disciplina", "Estatuto: cargo e função, obrigações e deveres",
+_LEG = ["Estatuto (Lei 6.783): hierarquia e disciplina", "Estatuto: cargo e função, obrigações e deveres",
         "Estatuto: direitos, prerrogativas, férias e licenças", "Estatuto: situações especiais e proteção social",
         "Estatuto: desligamento, exclusão, tempo de serviço", "Cód. Disciplinar (Lei 11.817): regime disciplinar e transgressões",
         "Cód. Disciplinar: penas e medidas administrativas", "Cód. Disciplinar: processo, recursos, comissões recursais",
@@ -364,8 +372,8 @@ def gerar_cronograma_cfo():
             add(s, dia, 1, "Bloco 1", 120, mat, "Revisão geral + questões AOCP" if s < 20 else "Revisão leve")
             add(s, dia, 2, "Bloco 2", 90, *b2[s][dia])
             add(s, dia, 3, "Bloco 3", 30, REV, "Caderno de erros")
-    add(17, 4, 1, "Simulado", 240, SIM, "Simulado 1: 70 questões em 3 h + redação em 1 h")
-    add(19, 4, 1, "Simulado", 240, SIM, "Simulado 2: 70 questões em 3 h + redação em 1 h")
+    add(17, 4, 1, "Simulado", 240, SIM, "Simulado 1: 70 questões + redação em 5 h")
+    add(19, 4, 1, "Simulado", 240, SIM, "Simulado 2: 70 questões + redação em 5 h")
     add(20, 4, 1, "Bloco 1", 120, LEG, "Só lei seca, nada de conteúdo novo (prova no domingo, 28/02)")
 
     # Semana 18: Carnaval (semana reduzida, 8 h)

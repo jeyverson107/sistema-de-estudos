@@ -18,6 +18,34 @@ def get_db():
     conn.execute("PRAGMA foreign_keys = ON;")
     return conn
 
+ORIENTACOES_PADRAO_PATH = os.path.join(BASE_DIR, "orientacoes_cfo.json")
+
+def carregar_orientacoes_padrao(c):
+    """Carrega as orientações que vêm com o app (orientacoes_cfo.json).
+    Só grava quando o arquivo muda, e nunca substitui uma orientação que você editou."""
+    if not os.path.exists(ORIENTACOES_PADRAO_PATH):
+        return
+    try:
+        with open(ORIENTACOES_PADRAO_PATH, "rb") as f:
+            conteudo = f.read()
+        import hashlib, json
+        assinatura = hashlib.sha1(conteudo).hexdigest()
+        c.execute("SELECT valor FROM configuracoes WHERE chave = 'orientacoes_padrao_versao'")
+        res = c.fetchone()
+        if res and res[0] == assinatura:
+            return
+        dados = json.loads(conteudo.decode("utf-8"))
+        for o in dados.get("orientacoes", []):
+            materia, topico, texto = (str(o.get(k, "")).strip() for k in ("materia", "topico", "texto"))
+            if materia and topico and texto:
+                c.execute("""INSERT INTO orientacoes (materia, topico, texto, origem) VALUES (?, ?, ?, 'padrao')
+                             ON CONFLICT(materia, topico) DO UPDATE SET texto = excluded.texto
+                             WHERE orientacoes.origem = 'padrao'""", (materia, topico, texto))
+        c.execute("INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES ('orientacoes_padrao_versao', ?)",
+                  (assinatura,))
+    except Exception:
+        pass  # se o arquivo estiver com problema, o app continua funcionando sem ele
+
 def init_db():
     conn = get_db()
     c = conn.cursor()
@@ -87,6 +115,12 @@ def init_db():
     for nome_col, tipo_col in novas_colunas.items():
         if nome_col not in colunas_existentes:
             c.execute(f"ALTER TABLE topicos ADD COLUMN {nome_col} {tipo_col}")
+
+    # NOVO: marca de quem escreveu a orientação ('padrao' = veio com o app; 'usuario' = você editou)
+    colunas_orient = [col[1] for col in c.execute("PRAGMA table_info(orientacoes)").fetchall()]
+    if "origem" not in colunas_orient:
+        c.execute("ALTER TABLE orientacoes ADD COLUMN origem TEXT DEFAULT 'usuario'")
+    carregar_orientacoes_padrao(c)
 
     # Auto-correção para "portugês" -> "Português" no banco
     c.execute("UPDATE materias SET nome = REPLACE(nome, 'portugês', 'português') WHERE nome LIKE '%portugês%'")
@@ -731,11 +765,10 @@ def buscar_orientacao(conn, materia, nome_topico):
 
 def salvar_orientacao(conn, materia, topico, texto):
     c = conn.cursor()
-    if texto.strip():
-        c.execute("INSERT OR REPLACE INTO orientacoes (materia, topico, texto) VALUES (?, ?, ?)",
-                  (materia, topico_sem_prefixo(topico), texto.strip()))
-    else:
-        c.execute("DELETE FROM orientacoes WHERE materia = ? AND topico = ?", (materia, topico_sem_prefixo(topico)))
+    # Guarda como 'usuario': a orientação padrão do app nunca volta por cima da sua
+    # (se você apagar o texto, fica vazio e a padrão não reaparece)
+    c.execute("INSERT OR REPLACE INTO orientacoes (materia, topico, texto, origem) VALUES (?, ?, ?, 'usuario')",
+              (materia, topico_sem_prefixo(topico), texto.strip()))
     conn.commit()
 
 def ler_arquivo_orientacoes(dados):

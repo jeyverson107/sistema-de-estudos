@@ -842,8 +842,38 @@ def modelos_gemini(chave):
         return (instavel, grupo, -versao(n), n)
     return sorted(set(nomes), key=ordem)
 
+def _erro_temporario(e):
+    msg = str(e)
+    return any(x in msg for x in ("503", "UNAVAILABLE", "overloaded", "high demand", "500", "INTERNAL", "429", "RESOURCE_EXHAUSTED"))
+
+def _erro_de_modelo(e):
+    msg = str(e)
+    return "404" in msg or "not found" in msg.lower() or "not supported" in msg.lower()
+
 def gemini_json(chave, modelo, instrucao, pdfs=None):
-    """Envia a instrução (e os PDFs) ao Gemini e devolve o JSON da resposta já convertido em dicionário."""
+    """Envia a instrução (e os PDFs) ao Gemini e devolve o JSON da resposta já convertido em dicionário.
+    Se o modelo estiver sobrecarregado, tenta de novo e depois passa para os outros modelos da lista."""
+    import time as _time
+    candidatos = [modelo] + [m for m in st.session_state.get("gemini_modelos", []) if m != modelo][:3]
+    ultimo_erro = None
+    for i, mod in enumerate(candidatos):
+        for tentativa in range(2 if i == 0 else 1):
+            try:
+                resultado = _gemini_json_um(chave, mod, instrucao, pdfs)
+                if mod != modelo:
+                    st.toast(f"O modelo escolhido estava ocupado; respondeu o {mod}.")
+                return resultado
+            except Exception as e:
+                ultimo_erro = e
+                if _erro_temporario(e):
+                    _time.sleep(4 if tentativa == 0 else 2)
+                    continue
+                if _erro_de_modelo(e):
+                    break
+                raise
+    raise ultimo_erro
+
+def _gemini_json_um(chave, modelo, instrucao, pdfs=None):
     import json as _json
     from google import genai
     from google.genai import types
@@ -861,6 +891,9 @@ def gemini_json(chave, modelo, instrucao, pdfs=None):
 
 def explicar_erro_gemini(e):
     msg = str(e)
+    if "503" in msg or "UNAVAILABLE" in msg or "high demand" in msg:
+        return ("Os servidores do Gemini estão sobrecarregados agora (isso é do Google, não do app). "
+                "O app já tentou de novo e com outros modelos. Espere alguns minutos e toque em '🔄 Tentar de novo'.")
     if "429" in msg or "RESOURCE_EXHAUSTED" in msg or "quota" in msg.lower():
         return "O limite do plano gratuito foi atingido. Espere 1 ou 2 minutos e tente de novo (ou tente amanhã, se for o limite diário)."
     if "API_KEY" in msg.upper() or "401" in msg or "403" in msg or "PERMISSION" in msg.upper():
@@ -1623,14 +1656,19 @@ elif menu == "🤖 Assistente Gemini":
                 else:
                     id_arquivo = f"{pdf_ed.name}-{pdf_ed.size}"
                     # passo 1: identifica os cargos automaticamente (uma vez por arquivo)
-                    if st.session_state.get("gem_cargos_arquivo") != id_arquivo:
+                    if st.session_state.get("gem_cargos_arquivo") not in (id_arquivo, "erro:" + id_arquivo):
                         with st.spinner("O Gemini está identificando os cargos do edital..."):
                             try:
                                 st.session_state["gem_cargos"] = gemini_json(chave, modelo, INSTRUCAO_CARGOS, [pdf_ed.getvalue()])
                                 st.session_state["gem_cargos_arquivo"] = id_arquivo
                                 st.session_state.pop("gem_edital", None)
                             except Exception as e:
+                                st.session_state["gem_cargos_arquivo"] = "erro:" + id_arquivo
                                 st.error(explicar_erro_gemini(e))
+                    if st.session_state.get("gem_cargos_arquivo") == "erro:" + id_arquivo:
+                        if st.button("🔄 Tentar de novo", key="gem_retry_cargos"):
+                            st.session_state.pop("gem_cargos_arquivo", None)
+                            st.rerun()
                     info_cargos = st.session_state.get("gem_cargos") if st.session_state.get("gem_cargos_arquivo") == id_arquivo else None
                     if info_cargos:
                         lista_c = [c for c in info_cargos.get("cargos", []) if str(c.get("nome", "")).strip()]

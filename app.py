@@ -759,13 +759,64 @@ def ler_arquivo_orientacoes(dados):
 # -----------------------------------------------------------------------------
 # NOVO: ASSISTENTE GEMINI (plano gratuito da API do Google)
 # -----------------------------------------------------------------------------
-def chave_gemini():
-    """Lê a chave dos 'Secrets' do Streamlit; se não houver, usa a digitada nesta sessão."""
+NOMES_CHAVE = ("GEMINI_API_KEY", "GEMINI_KEY", "GOOGLE_API_KEY", "API_KEY", "GEMINI")
+
+def _limpar_chave(v):
+    return str(v).strip().strip('"\'“”‘’ ').strip()
+
+def _nome_parece_chave(k):
+    n = str(k).strip().upper().replace(" ", "").replace("-", "_")
+    return n in NOMES_CHAVE or "GEMINI" in n
+
+def _procurar_chave(d):
+    """Procura a chave em qualquer nível dos Secrets (inclusive dentro de [seções]), sem diferenciar maiúsculas."""
     try:
-        chave = st.secrets.get("GEMINI_API_KEY", "")
+        itens = list(d.items())
+    except Exception:
+        return ""
+    for k, v in itens:
+        if hasattr(v, "items"):
+            achada = _procurar_chave(v)
+            if achada:
+                return achada
+        elif _nome_parece_chave(k) and _limpar_chave(v):
+            return _limpar_chave(v)
+    return ""
+
+def chave_gemini():
+    """Lê a chave dos 'Secrets' do Streamlit (ou da variável de ambiente); se não houver, usa a digitada nesta sessão."""
+    import os
+    chave = ""
+    try:
+        chave = _procurar_chave(st.secrets)
     except Exception:
         chave = ""
+    chave = chave or _limpar_chave(os.environ.get("GEMINI_API_KEY", ""))
     return chave or st.session_state.get("gemini_chave_digitada", "")
+
+def diagnostico_secrets():
+    """Explica por que a chave não foi encontrada, sem mostrar nenhum valor secreto."""
+    try:
+        nomes = []
+        def listar(d, prefixo=""):
+            for k, v in d.items():
+                if hasattr(v, "items"):
+                    listar(v, f"{prefixo}{k}.")
+                else:
+                    nomes.append(f"{prefixo}{k}")
+        listar(st.secrets)
+    except Exception as e:
+        texto = str(e)
+        if "No secrets" in texto or "not found" in texto.lower() or isinstance(e, FileNotFoundError):
+            return ("O app não encontrou nenhum Secret. A caixa Secrets está vazia, não foi salva, "
+                    "ou o app ainda não reiniciou depois de salvar.")
+        return ("Os Secrets foram encontrados, mas estão com erro de formato e o app não consegue lê-los. "
+                "Causa mais comum: aspas curvas (“ ”) no lugar de aspas retas (\"), ou falta de aspas. "
+                f"Detalhe técnico: {type(e).__name__}: {texto[:150]}")
+    if not nomes:
+        return "A caixa Secrets está vazia."
+    return ("Os Secrets foram lidos, mas nenhum se chama GEMINI_API_KEY ou o valor está vazio. "
+            "Nomes encontrados: " + ", ".join(nomes))
 
 def modelos_gemini(chave):
     """Lista os modelos de texto disponíveis para a chave, com os 'Flash' mais novos primeiro."""
@@ -1526,6 +1577,7 @@ elif menu == "🤖 Assistente Gemini":
                     "3. No Streamlit: **Manage app → ⋮ → Settings → Secrets** e cole a linha:\n"
                     "   `GEMINI_API_KEY = \"sua-chave-aqui\"`\n"
                     "4. Salve. O app reinicia sozinho.")
+        st.error("🔍 Diagnóstico: " + diagnostico_secrets())
         digitada = st.text_input("Ou cole a chave aqui só para testar agora (não fica salva):", type="password")
         if digitada:
             st.session_state["gemini_chave_digitada"] = digitada.strip()

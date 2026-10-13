@@ -831,12 +831,16 @@ def modelos_gemini(chave):
         if any(x in nome for x in ("tts", "live", "image", "embedding", "audio", "transcribe", "translate", "robotics")):
             continue
         nomes.append(nome)
+    import re as _re2
+    def versao(n):
+        m = _re2.search(r"(\d+(?:\.\d+)?)", n)
+        return float(m.group(1)) if m else 0.0
     def ordem(n):
-        return (0 if "flash" in n and "lite" not in n else 1 if "pro" in n else 2, n)
-    nomes = sorted(set(nomes), key=ordem)
-    flash = [n for n in nomes if "flash" in n and "lite" not in n]
-    flash.sort(reverse=True)
-    return flash + [n for n in nomes if n not in flash]
+        # 1º: 'Flash' numerado e estável (plano gratuito); depois Flash-Lite e Pro; por último preview/experimental/omni
+        instavel = any(x in n for x in ("preview", "exp", "omni"))
+        grupo = 0 if ("flash" in n and "lite" not in n) else 1 if "lite" in n else 2
+        return (instavel, grupo, -versao(n), n)
+    return sorted(set(nomes), key=ordem)
 
 def gemini_json(chave, modelo, instrucao, pdfs=None):
     """Envia a instrução (e os PDFs) ao Gemini e devolve o JSON da resposta já convertido em dicionário."""
@@ -894,6 +898,18 @@ Regras:
 - Tópicos em ordem lógica de estudo. Toda disciplina, exceto a redação, precisa de pelo menos um tópico.
 - Se houver prova discursiva ou redação, inclua como matéria com "tipo": "redacao" e "topicos": [].
 - Não invente disciplinas nem tópicos que não estejam no edital."""
+
+INSTRUCAO_CARGOS = """Leia o edital de concurso público em PDF anexado e identifique o concurso e TODOS os cargos oferecidos.
+Responda SOMENTE com um JSON neste formato:
+{
+  "orgao": "sigla do órgão (ex.: CBMPE)",
+  "ano": "ano do concurso ou da prova (ex.: 2027)",
+  "banca": "nome da banca organizadora",
+  "cargos": [
+    {"nome": "nome do cargo como está no edital", "codigo": "código do cargo, se houver", "nome_curto": "apelido curto e comum do cargo (ex.: CFO, Soldado)"}
+  ]
+}
+Não invente cargos que não estejam no edital."""
 
 INSTRUCAO_ORIENTACOES = """Você é um professor de cursinho para concursos, especialista na banca {banca}.
 Prepare orientações de estudo para cada bloco listado abaixo, do concurso "{objetivo}".
@@ -1598,21 +1614,56 @@ elif menu == "🤖 Assistente Gemini":
             aba_ed, aba_or = st.tabs(["📄 Ler edital", "📌 Orientações da semana"])
             
             with aba_ed:
-                st.write("Envie o PDF do edital. O Gemini extrai as matérias e os tópicos do seu cargo; "
-                         "você confere e salva. Depois é só ir em '🧭 Planejar Estudos'.")
+                st.write("Envie o PDF do edital. O Gemini identifica os cargos; você escolhe o seu e ele extrai "
+                         "as matérias e os tópicos. Depois é só ir em '🧭 Planejar Estudos'.")
                 pdf_ed = st.file_uploader("Edital (.pdf)", type=["pdf"], key="gem_pdf_edital")
-                cargo = st.text_input("Cargo exatamente como aparece no edital:", placeholder="Ex.: 2º Tenente QOC (CFO)")
-                objetivo_novo = st.text_input("Nome para este concurso no app:", placeholder="Ex.: CFO CBMPE 2027")
-                if st.button("🔎 Ler edital com o Gemini", type="primary", disabled=not (pdf_ed and cargo and objetivo_novo)):
-                    instr = INSTRUCAO_EDITAL.format(cargo=cargo.strip(), objetivo=objetivo_novo.strip(),
-                                                    data_padrao=(datetime.date.today() + datetime.timedelta(days=120)).isoformat())
-                    with st.spinner("O Gemini está lendo o edital. Pode levar até 1 minuto..."):
-                        try:
-                            bruto = gemini_json(chave, modelo, instr, [pdf_ed.getvalue()])
-                            bruto["objetivo"] = objetivo_novo.strip()
-                            st.session_state["gem_edital"] = bruto
-                        except Exception as e:
-                            st.error(explicar_erro_gemini(e))
+                if pdf_ed is None:
+                    for k in ("gem_cargos", "gem_cargos_arquivo", "gem_edital"):
+                        st.session_state.pop(k, None)
+                else:
+                    id_arquivo = f"{pdf_ed.name}-{pdf_ed.size}"
+                    # passo 1: identifica os cargos automaticamente (uma vez por arquivo)
+                    if st.session_state.get("gem_cargos_arquivo") != id_arquivo:
+                        with st.spinner("O Gemini está identificando os cargos do edital..."):
+                            try:
+                                st.session_state["gem_cargos"] = gemini_json(chave, modelo, INSTRUCAO_CARGOS, [pdf_ed.getvalue()])
+                                st.session_state["gem_cargos_arquivo"] = id_arquivo
+                                st.session_state.pop("gem_edital", None)
+                            except Exception as e:
+                                st.error(explicar_erro_gemini(e))
+                    info_cargos = st.session_state.get("gem_cargos") if st.session_state.get("gem_cargos_arquivo") == id_arquivo else None
+                    if info_cargos:
+                        lista_c = [c for c in info_cargos.get("cargos", []) if str(c.get("nome", "")).strip()]
+                        if not lista_c:
+                            st.error("O Gemini não encontrou cargos neste PDF. Confira se é o edital de abertura.")
+                        else:
+                            def rotulo_cargo(c):
+                                cod = str(c.get("codigo", "")).strip()
+                                return (f"{cod} – " if cod else "") + str(c["nome"]).strip()
+                            idx_c = st.selectbox("Cargo:", list(range(len(lista_c))), format_func=lambda i: rotulo_cargo(lista_c[i]),
+                                                 key=f"gem_cargo_{id_arquivo}")
+                            cargo_sel = lista_c[idx_c]
+                            sugestao = " ".join(x for x in [str(cargo_sel.get("nome_curto") or cargo_sel["nome"]).strip(),
+                                                           str(info_cargos.get("orgao", "")).strip(),
+                                                           str(info_cargos.get("ano", "")).strip()] if x)
+                            objetivo_novo = st.text_input("Nome deste concurso no app (pode alterar):", value=sugestao,
+                                                          key=f"gem_nome_{id_arquivo}_{idx_c}")
+                            if st.session_state.get("gem_edital") and st.session_state.get("gem_edital_cargo") != (id_arquivo, idx_c):
+                                st.session_state.pop("gem_edital", None)
+                            # passo 2: extrai o conteúdo do cargo escolhido
+                            if st.button("🔎 Ler conteúdo deste cargo", type="primary", disabled=not objetivo_novo.strip()):
+                                instr = INSTRUCAO_EDITAL.format(cargo=rotulo_cargo(cargo_sel), objetivo=objetivo_novo.strip(),
+                                                                data_padrao=(datetime.date.today() + datetime.timedelta(days=120)).isoformat())
+                                with st.spinner("O Gemini está lendo o conteúdo programático. Pode levar até 1 minuto..."):
+                                    try:
+                                        bruto = gemini_json(chave, modelo, instr, [pdf_ed.getvalue()])
+                                        bruto["objetivo"] = objetivo_novo.strip()
+                                        if not bruto.get("banca"):
+                                            bruto["banca"] = info_cargos.get("banca", "")
+                                        st.session_state["gem_edital"] = bruto
+                                        st.session_state["gem_edital_cargo"] = (id_arquivo, idx_c)
+                                    except Exception as e:
+                                        st.error(explicar_erro_gemini(e))
                 if st.session_state.get("gem_edital"):
                     edital_g, erros_g = ler_arquivo_edital(st.session_state["gem_edital"])
                     if erros_g:

@@ -4,6 +4,7 @@ import datetime
 import sqlite3
 import time
 import os
+from zoneinfo import ZoneInfo
 
 st.set_page_config(page_title="Sistema de Estudos & Carreira", layout="wide", page_icon="🛡️")
 
@@ -12,6 +13,10 @@ st.set_page_config(page_title="Sistema de Estudos & Carreira", layout="wide", pa
 # -----------------------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "estudos_master.db")
+
+def hoje_local():
+    """Data de hoje no horário do Recife (o servidor do Streamlit usa outro fuso)."""
+    return datetime.datetime.now(ZoneInfo("America/Recife")).date()
 
 def get_db():
     conn = sqlite3.connect(DB_PATH)
@@ -807,7 +812,7 @@ def total_semanas(meta_id, conn):
 def semana_e_dia_de_hoje(meta_id):
     """Devolve (semana, dia) de hoje no cronograma. dia = 0..6 (5 e 6 = fim de semana)."""
     inicio = datetime.date.fromisoformat(get_config(f"cronograma_inicio_{meta_id}", CRONO_INICIO.isoformat()))
-    hoje = datetime.date.today()
+    hoje = hoje_local()
     return (hoje - inicio).days // 7 + 1, hoje.weekday()
 
 def meta_tem_cronograma(meta_id, conn):
@@ -844,7 +849,44 @@ menu = st.sidebar.radio("Navegação", [
     "⚙️ Gerenciador"
 ])
 
+def ajuste_estatuto_14_10(conn):
+    """Ajuste pedido em 14/10/2026: o Estatuto (Lei 6.783), prioridade do edital, passa para hoje.
+    Troca os blocos 1 e 3 de segunda (12/10) com os de quarta (14/10) da semana 1. Roda uma vez só,
+    apenas em 14/10, e só se os quatro blocos ainda estiverem pendentes (nada do seu progresso se perde)."""
+    chave = "ajuste_estatuto_2026_10_14"
+    if get_config(chave, "") or hoje_local() != datetime.date(2026, 10, 14):
+        return
+    c = conn.cursor()
+    c.execute("SELECT id FROM metas WHERE nome = ?", (CRONO_META_NOME,))
+    meta = c.fetchone()
+    if not meta:
+        return
+    inicio = datetime.date.fromisoformat(get_config(f"cronograma_inicio_{meta[0]}", CRONO_INICIO.isoformat()))
+    if inicio != CRONO_INICIO:
+        return
+    blocos = {}
+    for dia, ordem in ((0, 1), (0, 3), (2, 1), (2, 3)):
+        c.execute("""SELECT t.id, t.nome, t.status, COALESCE(t.minutos_estudados, 0) FROM topicos t
+                     JOIN materias m ON t.materia_id = m.id
+                     WHERE m.meta_id = ? AND t.semana = 1 AND t.dia = ? AND t.ordem = ?""", (meta[0], dia, ordem))
+        r = c.fetchone()
+        if not r or r[2] != "Pendente" or r[3] > 0:
+            set_config(chave, "pulado")
+            return
+        blocos[(dia, ordem)] = r
+    if "Estatuto" not in blocos[(0, 1)][1]:
+        set_config(chave, "pulado")
+        return
+    for ordem in (1, 3):
+        seg, qua = blocos[(0, ordem)], blocos[(2, ordem)]
+        for tid, nome, novo_dia in ((seg[0], seg[1], 2), (qua[0], qua[1], 0)):
+            c.execute("UPDATE topicos SET dia = ?, nome = ? WHERE id = ?",
+                      (novo_dia, nome_topico_crono(1, novo_dia, topico_sem_prefixo(nome), inicio), tid))
+    conn.commit()
+    set_config(chave, "feito")
+
 conn = get_db()
+ajuste_estatuto_14_10(conn)
 
 # =============================================================================
 # MENU 1: META & ROTINA DO DIA
@@ -1080,7 +1122,7 @@ elif menu == "🧭 Planejar Estudos":
         
         st.subheader("1. Sua rotina")
         r1, r2 = st.columns(2)
-        hoje = datetime.date.today()
+        hoje = hoje_local()
         proxima_segunda = hoje + datetime.timedelta(days=(7 - hoje.weekday()) % 7)
         with r1:
             inicio_escolhido = st.date_input("Começar a estudar em:", value=datetime.date.fromisoformat(cfg.get("inicio", proxima_segunda.isoformat())),
@@ -1422,7 +1464,7 @@ elif menu == "🎯 Simulado do que já estudei":
                 st.caption("Ainda sem nenhum assunto estudado (ficam de fora): " + ", ".join(faltando))
             
             # monta o pedido
-            hoje_txt = datetime.date.today().strftime("%d/%m/%Y")
+            hoje_txt = hoje_local().strftime("%d/%m/%Y")
             partes_txt = [
                 f"PEDIDO DE SIMULADO – {meta_sim} – gerado pelo meu app em {hoje_txt}",
                 "",
@@ -1445,7 +1487,7 @@ elif menu == "🎯 Simulado do que já estudei":
             st.caption("Toque no ícone de copiar no canto da caixa abaixo e cole na conversa com o Claude.")
             st.code(pedido, language=None)
             st.download_button("⬇️ Baixar o pedido (.txt)", data=pedido,
-                               file_name=f"pedido_simulado_{datetime.date.today():%Y-%m-%d}.txt", mime="text/plain")
+                               file_name=f"pedido_simulado_{hoje_local():%Y-%m-%d}.txt", mime="text/plain")
 
 elif menu == "📝 Registrar Questões":
     st.header("📝 Registro de Desempenho em Exercícios")
@@ -1466,7 +1508,7 @@ elif menu == "📝 Registrar Questões":
             mat_sel = st.selectbox("Selecione a Matéria", df_mat['nome'].tolist())
             mat_id = df_mat[df_mat['nome'] == mat_sel]['id'].values[0]
             
-            df_top = pd.read_sql_query("SELECT id, nome FROM topicos WHERE materia_id = ?", conn, params=(int(mat_id),))
+            df_top = pd.read_sql_query("SELECT id, nome FROM topicos WHERE materia_id = ? ORDER BY COALESCE(semana, 0), COALESCE(dia, 0), COALESCE(ordem, 0), id", conn, params=(int(mat_id),))
             
             if df_top.empty:
                 st.warning("Nenhum tópico cadastrado nesta matéria.")
@@ -1482,7 +1524,7 @@ elif menu == "📝 Registrar Questões":
                     if st.form_submit_button("Salvar Desempenho"):
                         c = conn.cursor()
                         c.execute("INSERT INTO exercicios (data, topico_id, acertos, erros) VALUES (?, ?, ?, ?)",
-                                  (datetime.date.today().strftime('%Y-%m-%d'), int(topico_id), acertos, erros))
+                                  (hoje_local().strftime('%Y-%m-%d'), int(topico_id), acertos, erros))
                         conn.commit()
                         st.success("Exercícios registrados com sucesso!")
                         st.rerun()
@@ -1708,7 +1750,7 @@ elif menu == "⚙️ Gerenciador":
                  "basta enviar o arquivo de volta aqui.")
         with open(DB_PATH, "rb") as f_db:
             st.download_button("⬇️ Baixar backup (.db)", data=f_db.read(),
-                               file_name=f"backup_estudos_{datetime.date.today():%Y-%m-%d}.db",
+                               file_name=f"backup_estudos_{hoje_local():%Y-%m-%d}.db",
                                mime="application/octet-stream")
         arquivo_backup = st.file_uploader("Restaurar a partir de um backup (.db)", type=["db"])
         if arquivo_backup is not None:

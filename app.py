@@ -133,6 +133,8 @@ def init_db():
         c.execute("UPDATE OR IGNORE orientacoes SET topico = REPLACE(topico, ?, ?) WHERE topico LIKE ? AND origem = 'usuario'",
                   (antigo, novo, f"%{antigo}%"))
         c.execute("DELETE FROM orientacoes WHERE topico LIKE ? AND origem = 'padrao'", (f"%{antigo}%",))
+    c.execute("INSERT OR IGNORE INTO configuracoes (chave, valor) VALUES ('banco_criado_em', ?)",
+              (datetime.datetime.now(ZoneInfo('America/Recife')).strftime('%d/%m/%Y %H:%M'),))
     carregar_orientacoes_padrao(c)
 
     # Auto-correção para "portugês" -> "Português" no banco
@@ -838,6 +840,38 @@ def salvar_status_topico(conn, topico_id, status, minutos=None):
 # -----------------------------------------------------------------------------
 st.title("🛡️ Sistema Unificado de Gestão de Estudos")
 
+# -----------------------------------------------------------------------------
+# NOVO: AVISOS DE CONFIRMAÇÃO (não somem quando a tela recarrega)
+# -----------------------------------------------------------------------------
+def avisar(msg, tipo="success"):
+    """Guarda um aviso para mostrar depois do recarregamento da tela."""
+    st.session_state.setdefault("_avisos", []).append((tipo, msg))
+
+def mostrar_avisos():
+    for tipo, msg in st.session_state.pop("_avisos", []):
+        icone = {"success": "✅", "error": "❌", "warning": "⚠️", "info": "ℹ️"}.get(tipo, "ℹ️")
+        getattr(st, tipo)(f"{icone} {msg}")
+        try:
+            st.toast(msg[:140], icon=icone)
+        except Exception:
+            pass
+
+def conferir_status(conn, topico_id):
+    """Relê do banco o status e os minutos do bloco, para confirmar a gravação."""
+    r = conn.execute("SELECT nome, status, COALESCE(minutos_estudados, 0) FROM topicos WHERE id = ?", (int(topico_id),)).fetchone()
+    return r
+
+def salvar_status_com_aviso(conn, topico_id, status, minutos=None):
+    try:
+        salvar_status_topico(conn, topico_id, status, minutos)
+        r = conferir_status(conn, topico_id)
+        if r and r[1] == status:
+            avisar(f"Salvo e conferido: \"{r[0].split(' · ', 1)[-1]}\" está como {r[1]}, com {r[2]} min registrados.")
+        else:
+            avisar("O app tentou salvar, mas ao conferir o banco o status não mudou. Tente de novo e, se repetir, me avise.", "error")
+    except Exception as e:
+        avisar(f"NÃO foi salvo. Erro: {e}", "error")
+
 menu = st.sidebar.radio("Navegação", [
     "📅 Meta & Rotina do Dia",
     "🧭 Planejar Estudos",
@@ -848,6 +882,8 @@ menu = st.sidebar.radio("Navegação", [
     "📊 Dashboard de Evolução", 
     "⚙️ Gerenciador"
 ])
+mostrar_avisos()
+
 
 def ajuste_estatuto_14_10(conn):
     """Ajuste pedido em 14/10/2026: o Estatuto (Lei 6.783), prioridade do edital, passa para hoje.
@@ -956,7 +992,13 @@ if menu == "📅 Meta & Rotina do Dia":
                                 novo_txt = st.text_area("Orientação", value=orientacao, height=150,
                                                         key=f"ori_{topico_id}", label_visibility="collapsed")
                                 if st.button("💾 Salvar orientação", key=f"ori_salvar_{topico_id}"):
-                                    salvar_orientacao(conn, row['materia'], row['nome'], novo_txt)
+                                    try:
+                                        salvar_orientacao(conn, row['materia'], row['nome'], novo_txt)
+                                        avisar("Orientação salva e conferida." if buscar_orientacao(conn, row['materia'], row['nome']) == novo_txt.strip()
+                                               else "Orientação apagada." if not novo_txt.strip() else "A orientação não foi confirmada no banco. Tente de novo.",
+                                               "success" if buscar_orientacao(conn, row['materia'], row['nome']) == novo_txt.strip() or not novo_txt.strip() else "error")
+                                    except Exception as e:
+                                        avisar(f"Orientação NÃO salva. Erro: {e}", "error")
                                     st.rerun()
                             st.write(f"**Status:** `{row['status']}` · **Minutos registrados:** {int(row['minutos_estudados'] or 0)}")
 
@@ -990,12 +1032,12 @@ if menu == "📅 Meta & Rotina do Dia":
                                         minutos = minutos_ja + minutos_cronometrados
                                     else:
                                         minutos = minutos_ja if minutos_ja > 0 else minutos_plan
-                                    salvar_status_topico(conn, topico_id, "Concluído", minutos)
+                                    salvar_status_com_aviso(conn, topico_id, "Concluído", minutos)
                                     set_timer_stop(topico_id)
                                     st.rerun()
                             with col_b:
                                 if st.button("⏳ Fiz só uma parte", key=f"cr_parc_{topico_id}"):
-                                    salvar_status_topico(conn, topico_id, "Parcial", minutos_ja + minutos_cronometrados)
+                                    salvar_status_com_aviso(conn, topico_id, "Parcial", minutos_ja + minutos_cronometrados)
                                     set_timer_stop(topico_id)
                                     st.rerun()
 
@@ -1089,7 +1131,7 @@ if menu == "📅 Meta & Rotina do Dia":
                                 c.execute("UPDATE topicos SET status = 'Concluído', teoria = 1, resumo = 1 WHERE id = ?", (int(topico_id),))
                                 conn.commit()
                                 set_timer_stop(topico_id)
-                                st.success("Tópico Concluído!")
+                                avisar("Tópico Concluído!", "success")
                                 st.rerun()
                         with col_b:
                             if st.button(f"⏳ Parcialmente Estudado", key=f"parc_{topico_id}"):
@@ -1097,7 +1139,7 @@ if menu == "📅 Meta & Rotina do Dia":
                                 c.execute("UPDATE topicos SET status = 'Parcial', teoria = 1 WHERE id = ?", (int(topico_id),))
                                 conn.commit()
                                 set_timer_stop(topico_id)
-                                st.info("Marcado como Parcial.")
+                                avisar("Marcado como Parcial.", "info")
                                 st.rerun()
 
 # =============================================================================
@@ -1288,7 +1330,7 @@ elif menu == "🗓️ Cronograma Semanal":
             if st.button("💾 Salvar a semana"):
                 for _, row in editado.iterrows():
                     salvar_status_topico(conn, row['id'], row['Status'], int(row['Estudado_min'] or 0))
-                st.success("Semana salva! O Dashboard e o Checklist já foram atualizados.")
+                avisar("Semana salva! O Dashboard e o Checklist já foram atualizados.", "success")
                 st.rerun()
             
             st.markdown("---")
@@ -1399,7 +1441,7 @@ elif menu == "📋 Checklist & Acompanhamento":
                             WHERE id = ?
                         """, (is_teoria, is_resumo, status_str, int(row['id'])))
                     conn.commit()
-                    st.success("Progresso salvo e sincronizado com o Dashboard de Evolução!")
+                    avisar("Progresso salvo e sincronizado com o Dashboard de Evolução!", "success")
                     st.rerun()
 
 # =============================================================================
@@ -1515,19 +1557,62 @@ elif menu == "📝 Registrar Questões":
             else:
                 topico_sel = st.selectbox("Selecione o Tópico", df_top['nome'].tolist())
                 topico_id = df_top[df_top['nome'] == topico_sel]['id'].values[0]
-                
-                with st.form("form_ex"):
+
+                with st.form("form_ex", clear_on_submit=True):
                     col_a, col_b = st.columns(2)
-                    with col_a: acertos = st.number_input("Número de Acertos", min_value=0, value=10)
-                    with col_b: erros = st.number_input("Número de Erros", min_value=0, value=2)
-                    
-                    if st.form_submit_button("Salvar Desempenho"):
-                        c = conn.cursor()
-                        c.execute("INSERT INTO exercicios (data, topico_id, acertos, erros) VALUES (?, ?, ?, ?)",
-                                  (hoje_local().strftime('%Y-%m-%d'), int(topico_id), acertos, erros))
-                        conn.commit()
-                        st.success("Exercícios registrados com sucesso!")
+                    with col_a: acertos = st.number_input("Número de Acertos", min_value=0, value=0, step=1)
+                    with col_b: erros = st.number_input("Número de Erros", min_value=0, value=0, step=1)
+
+                    if st.form_submit_button("💾 Salvar Desempenho"):
+                        if acertos + erros == 0:
+                            avisar("Nada foi salvo: informe pelo menos 1 acerto ou 1 erro.", "warning")
+                        else:
+                            try:
+                                c = conn.cursor()
+                                c.execute("INSERT INTO exercicios (data, topico_id, acertos, erros) VALUES (?, ?, ?, ?)",
+                                          (hoje_local().strftime('%Y-%m-%d'), int(topico_id), int(acertos), int(erros)))
+                                conn.commit()
+                                novo_id = c.lastrowid
+                                conf = conn.execute("SELECT acertos, erros FROM exercicios WHERE id = ?", (novo_id,)).fetchone()
+                                if conf and conf[0] == int(acertos) and conf[1] == int(erros):
+                                    total = conf[0] + conf[1]
+                                    avisar(f"Salvo e conferido no banco: {conf[0]} acertos e {conf[1]} erros "
+                                           f"({round(100 * conf[0] / total)}% de acerto) em \"{topico_sel.split(' · ', 1)[-1]}\".")
+                                else:
+                                    avisar("O app tentou salvar, mas não encontrou o registro ao conferir o banco. Tente de novo.", "error")
+                            except Exception as e:
+                                avisar(f"NÃO foi salvo. Erro: {e}", "error")
                         st.rerun()
+
+                # Histórico: prova de que o registro está no banco
+                st.markdown("#### 📚 Seus registros neste tópico")
+                df_reg = pd.read_sql_query(
+                    "SELECT id, data, acertos, erros FROM exercicios WHERE topico_id = ? ORDER BY id DESC",
+                    conn, params=(int(topico_id),))
+                if df_reg.empty:
+                    st.info("Nenhum registro salvo neste tópico ainda.")
+                else:
+                    tot_a, tot_e = int(df_reg['acertos'].sum()), int(df_reg['erros'].sum())
+                    st.write(f"**Total:** {tot_a} acertos · {tot_e} erros · "
+                             f"**{round(100 * tot_a / max(1, tot_a + tot_e))}%** de acerto em {len(df_reg)} registro(s).")
+                    mostrar = df_reg.copy()
+                    mostrar['data'] = pd.to_datetime(mostrar['data']).dt.strftime('%d/%m/%Y')
+                    mostrar.columns = ['Nº', 'Data', 'Acertos', 'Erros']
+                    st.dataframe(mostrar, hide_index=True, use_container_width=True)
+                    with st.expander("🗑️ Apagar um registro lançado errado"):
+                        opcoes = {f"Nº {r.id} · {pd.to_datetime(r.data):%d/%m/%Y} · {r.acertos} acertos, {r.erros} erros": int(r.id)
+                                  for r in df_reg.itertuples()}
+                        escolha = st.selectbox("Registro", list(opcoes.keys()), key="ex_apagar_sel")
+                        if st.button("Apagar este registro", key="ex_apagar_btn"):
+                            try:
+                                conn.execute("DELETE FROM exercicios WHERE id = ?", (opcoes[escolha],))
+                                conn.commit()
+                                ainda = conn.execute("SELECT 1 FROM exercicios WHERE id = ?", (opcoes[escolha],)).fetchone()
+                                avisar("Registro apagado." if not ainda else "O registro NÃO foi apagado. Tente de novo.",
+                                       "success" if not ainda else "error")
+                            except Exception as e:
+                                avisar(f"NÃO foi apagado. Erro: {e}", "error")
+                            st.rerun()
 
 # =============================================================================
 # MENU 4: DASHBOARD DE EVOLUÇÃO
@@ -1630,7 +1715,8 @@ elif menu == "📊 Dashboard de Evolução":
 elif menu == "⚙️ Gerenciador":
     st.header("⚙️ Gerenciador do Sistema")
     
-    t0, t1, t2, t3, t6, t5 = st.tabs([
+    t7, t0, t1, t2, t3, t6, t5 = st.tabs([
+        "🩺 Verificar dados",
         "⚙️ Disp. de Tempo",
         "1. Objetivos",
         "2. Matérias",
@@ -1638,6 +1724,45 @@ elif menu == "⚙️ Gerenciador":
         "📅 Cronogramas",
         "🗑️ Excluir / Limpar Dados"
     ])
+
+    with t7:
+        st.subheader("🩺 O que está salvo no app")
+        st.caption("Tudo abaixo é lido agora do banco de dados. Se um número aqui não bater com o que você registrou, me avise.")
+        criado = get_config("banco_criado_em", "")
+        if criado:
+            st.write(f"**Banco de dados ativo desde:** {criado}")
+        cont = {
+            "Objetivos": "SELECT COUNT(*) FROM metas",
+            "Blocos do cronograma": "SELECT COUNT(*) FROM topicos WHERE semana IS NOT NULL",
+            "Blocos concluídos": "SELECT COUNT(*) FROM topicos WHERE status = 'Concluído'",
+            "Blocos parciais": "SELECT COUNT(*) FROM topicos WHERE status = 'Parcial'",
+            "Minutos estudados (total)": "SELECT COALESCE(SUM(minutos_estudados), 0) FROM topicos",
+            "Registros de questões": "SELECT COUNT(*) FROM exercicios",
+            "Questões resolvidas": "SELECT COALESCE(SUM(acertos + erros), 0) FROM exercicios",
+            "Orientações que você editou": "SELECT COUNT(*) FROM orientacoes WHERE origem = 'usuario'",
+        }
+        cols = st.columns(2)
+        for i, (rot, q) in enumerate(cont.items()):
+            cols[i % 2].metric(rot, conn.execute(q).fetchone()[0])
+        st.markdown("**Últimos registros de questões**")
+        df_ult = pd.read_sql_query("""SELECT e.id AS "Nº", e.data AS Data, m.nome AS Matéria, t.nome AS Tópico,
+                                       e.acertos AS Acertos, e.erros AS Erros
+                                FROM exercicios e JOIN topicos t ON e.topico_id = t.id JOIN materias m ON t.materia_id = m.id
+                                ORDER BY e.id DESC LIMIT 10""", conn)
+        if df_ult.empty:
+            st.info("Nenhuma questão registrada ainda.")
+        else:
+            st.dataframe(df_ult, hide_index=True, use_container_width=True)
+        st.markdown("**Últimos blocos marcados**")
+        df_bl = pd.read_sql_query("""SELECT t.nome AS Bloco, t.status AS Status, t.minutos_estudados AS Minutos
+                                FROM topicos t WHERE t.status != 'Pendente' AND t.semana IS NOT NULL
+                                ORDER BY t.semana DESC, t.dia DESC, t.ordem DESC LIMIT 10""", conn)
+        if df_bl.empty:
+            st.info("Nenhum bloco marcado como concluído ou parcial ainda.")
+        else:
+            st.dataframe(df_bl, hide_index=True, use_container_width=True)
+        st.warning("⚠️ O Streamlit Cloud pode apagar o banco quando o app é reiniciado. Se os números acima zerarem, "
+                   "restaure o último backup na aba 📅 Cronogramas. Baixe um backup depois de cada dia de estudo.")
 
     with t6:
         st.subheader("📅 Carregar o Cronograma CFO CBMPE 2027")
@@ -1651,12 +1776,12 @@ elif menu == "⚙️ Gerenciador":
             confirmar = st.checkbox("Entendi. Quero apagar e carregar de novo.")
             if st.button("🔄 Recarregar cronograma", disabled=not confirmar):
                 n = carregar_cronograma_cfo(conn, substituir=True)
-                st.success(f"Cronograma recarregado: {n} blocos.")
+                avisar(f"Cronograma recarregado: {n} blocos.", "success")
                 st.rerun()
         else:
             if st.button("🚀 Carregar cronograma", type="primary"):
                 n = carregar_cronograma_cfo(conn)
-                st.success(f"Cronograma carregado: {n} blocos. Veja em '🗓️ Cronograma Semanal'.")
+                avisar(f"Cronograma carregado: {n} blocos. Veja em '🗓️ Cronograma Semanal'.", "success")
                 st.rerun()
 
         st.markdown("---")
@@ -1739,7 +1864,7 @@ elif menu == "⚙️ Gerenciador":
                 if st.button("✅ Importar este cronograma", type="primary", disabled=not pode_importar):
                     n = carregar_cronograma(conn, dados_crono["objetivo"], dados_crono["inicio"], itens_crono,
                                             dados_crono["tipo"], substituir=existe_obj)
-                    st.success(f"Cronograma importado: {n} blocos. Veja em '🗓️ Cronograma Semanal'.")
+                    avisar(f"Cronograma importado: {n} blocos. Veja em '🗓️ Cronograma Semanal'.", "success")
                     st.rerun()
         st.download_button("⬇️ Baixar modelo (cronograma CFO em .json)", data=gerar_json_cronograma_cfo(),
                            file_name="modelo_cronograma.json", mime="application/json")
@@ -1764,7 +1889,7 @@ elif menu == "⚙️ Gerenciador":
                     with open(DB_PATH, "wb") as f_out:
                         f_out.write(conteudo)
                     init_db()
-                    st.success("Backup restaurado!")
+                    avisar("Backup restaurado!", "success")
                     st.rerun()
 
     with t0:
@@ -1779,7 +1904,7 @@ elif menu == "⚙️ Gerenciador":
             if st.form_submit_button("Salvar Horários"):
                 set_config("horas_estudo_dia", novas_horas)
                 set_config("turno_estudo", novo_turno)
-                st.success("Configurações salvas!")
+                avisar("Configurações salvas!", "success")
                 st.rerun()
 
     with t1:
@@ -1793,7 +1918,7 @@ elif menu == "⚙️ Gerenciador":
                         c = conn.cursor()
                         c.execute("INSERT INTO metas (nome, tipo) VALUES (?, ?)", (n_meta.strip(), tipo_meta))
                         conn.commit()
-                        st.success(f"Objetivo '{n_meta}' adicionado!")
+                        avisar(f"Objetivo '{n_meta}' adicionado!", "success")
                         st.rerun()
                     except:
                         st.error("Esse objetivo já existe.")
@@ -1815,7 +1940,7 @@ elif menu == "⚙️ Gerenciador":
                         c = conn.cursor()
                         c.execute("INSERT INTO materias (meta_id, nome) VALUES (?, ?)", (int(m_id_sel), m_corrigida))
                         conn.commit()
-                        st.success(f"Matéria '{m_corrigida}' adicionada!")
+                        avisar(f"Matéria '{m_corrigida}' adicionada!", "success")
                         st.rerun()
 
     with t3:
@@ -1842,7 +1967,7 @@ elif menu == "⚙️ Gerenciador":
                         c.execute("INSERT INTO topicos (materia_id, nome) VALUES (?, ?)", 
                                   (int(target_mat_id), n_topico.strip()))
                         conn.commit()
-                        st.success("Tópico adicionado com sucesso!")
+                        avisar("Tópico adicionado com sucesso!", "success")
                         st.rerun()
 
     with t5:
@@ -1873,7 +1998,7 @@ elif menu == "⚙️ Gerenciador":
                         c = conn.cursor()
                         c.execute("DELETE FROM materias WHERE id = ?", (int(mat_id_del),))
                         conn.commit()
-                        st.success(f"Matéria '{sel_mat_del}' excluída com sucesso!")
+                        avisar(f"Matéria '{sel_mat_del}' excluída com sucesso!", "success")
                         st.rerun()
 
             with col_del2:
@@ -1885,7 +2010,7 @@ elif menu == "⚙️ Gerenciador":
                     c = conn.cursor()
                     c.execute("DELETE FROM materias WHERE meta_id = ?", (int(m_id_d2),))
                     conn.commit()
-                    st.success(f"Todas as matérias e tópicos de '{sel_meta_d2}' foram apagados. Você pode importar novamente.")
+                    avisar(f"Todas as matérias e tópicos de '{sel_meta_d2}' foram apagados. Você pode importar novamente.", "success")
                     st.rerun()
 
 conn.close()

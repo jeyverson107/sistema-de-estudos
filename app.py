@@ -99,6 +99,14 @@ def init_db():
                     conteudo TEXT,
                     ajustes TEXT
                 )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS sessoes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    data TEXT,
+                    topico_id INTEGER,
+                    minutos INTEGER,
+                    origem TEXT DEFAULT 'app',
+                    FOREIGN KEY(topico_id) REFERENCES topicos(id) ON DELETE CASCADE
+                )''')
     c.execute('''CREATE TABLE IF NOT EXISTS cronometro_estado (
                     topico_id INTEGER PRIMARY KEY,
                     status TEXT,
@@ -831,8 +839,13 @@ def salvar_status_topico(conn, topico_id, status, minutos=None):
         c.execute("UPDATE topicos SET status = ?, teoria = ?, resumo = MAX(resumo, ?) WHERE id = ?",
                   (status, teoria, resumo, int(topico_id)))
     else:
+        antes = c.execute("SELECT COALESCE(minutos_estudados, 0) FROM topicos WHERE id = ?", (int(topico_id),)).fetchone()
+        delta = int(minutos) - (int(antes[0]) if antes else 0)
         c.execute("UPDATE topicos SET status = ?, teoria = ?, resumo = MAX(resumo, ?), minutos_estudados = ? WHERE id = ?",
                   (status, teoria, resumo, int(minutos), int(topico_id)))
+        if delta != 0:  # guarda QUANDO você estudou (para o calendário e as horas por semana)
+            c.execute("INSERT INTO sessoes (data, topico_id, minutos, origem) VALUES (?, ?, ?, 'app')",
+                      (hoje_local().isoformat(), int(topico_id), delta))
     conn.commit()
 
 # -----------------------------------------------------------------------------
@@ -958,7 +971,24 @@ def ajuste_estatuto_14_10(conn):
     conn.commit()
     set_config(chave, "feito")
 
+def preencher_sessoes_antigas(conn):
+    """Uma vez só: minutos registrados antes da tabela de sessões viram sessões na data do bloco (estimativa)."""
+    if get_config("sessoes_preenchidas", ""):
+        return
+    linhas = conn.execute("""SELECT t.id, t.semana, t.dia, t.minutos_estudados, m.meta_id FROM topicos t
+                             JOIN materias m ON t.materia_id = m.id
+                             WHERE COALESCE(t.minutos_estudados, 0) > 0 AND t.semana IS NOT NULL
+                               AND t.id NOT IN (SELECT topico_id FROM sessoes)""").fetchall()
+    for tid, sem, dia, mins, meta_id in linhas:
+        inicio = datetime.date.fromisoformat(get_config(f"cronograma_inicio_{meta_id}", CRONO_INICIO.isoformat()))
+        data = min(inicio + datetime.timedelta(weeks=int(sem) - 1, days=int(dia)), hoje_local())
+        conn.execute("INSERT INTO sessoes (data, topico_id, minutos, origem) VALUES (?, ?, ?, 'estimado')",
+                     (data.isoformat(), tid, int(mins)))
+    conn.commit()
+    set_config("sessoes_preenchidas", "sim")
+
 conn = get_db()
+preencher_sessoes_antigas(conn)
 ajuste_estatuto_14_10(conn)
 
 # =============================================================================
@@ -1514,96 +1544,316 @@ elif menu == "📝 Registrar Questões":
 # MENU 4: DASHBOARD DE EVOLUÇÃO
 # =============================================================================
 elif menu == "📊 Dashboard de Evolução":
-    st.header("📊 Dashboard Geral de Desempenho")
-    
+    import altair as alt
+    st.header("📊 Meu Desempenho")
+
+    # Cores: status (crítico/fraco/forte) só para o que pede atenção; azul para quantidade; cinza para o resto
+    COR_CRITICO, COR_FRACO, COR_FORTE = "#d03b3b", "#fab219", "#0ca30c"
+    AZUL, AZUL_ESCURO, CINZA, CINZA_CLARO = "#256abf", "#104281", "#9aa0a6", "#e3e5e8"
+
+    def faixa(pct, n):
+        if pct is None or n < 10:
+            return "⚪ pouco dado"
+        return "🔴 crítico" if pct < 50 else ("🟡 fraco" if pct < 75 else "🟢 forte")
+
     df_metas = pd.read_sql_query("SELECT id, nome FROM metas WHERE ativa = 1", conn)
-    
     if df_metas.empty:
-        st.warning("Nenhum objetivo ativo para gerar relatórios.")
+        st.warning("Nenhum objetivo ativo. Carregue o cronograma em ⚙️ Gerenciador → 📅 Cronogramas.")
     else:
-        tabs = st.tabs(df_metas['nome'].tolist())
-        
-        for idx, row_meta in df_metas.iterrows():
-            with tabs[idx]:
-                m_id = row_meta['id']
-                df_mats = pd.read_sql_query("SELECT id, nome FROM materias WHERE meta_id = ?", conn, params=(int(m_id),))
-                
-                if df_mats.empty:
-                    st.info("Sem matérias cadastradas.")
+        meta_nome = st.selectbox("Objetivo", df_metas['nome'].tolist()) if len(df_metas) > 1 else df_metas['nome'].iloc[0]
+        m_id = int(df_metas[df_metas['nome'] == meta_nome]['id'].values[0])
+        hoje = hoje_local()
+        inicio = datetime.date.fromisoformat(get_config(f"cronograma_inicio_{m_id}", CRONO_INICIO.isoformat()))
+
+        # Peso de cada matéria na prova e data da prova (do edital salvo; o CFO já vem definido)
+        QUESTOES_CFO = {"Língua Portuguesa": 5, "Língua Estrangeira": 5, "Informática": 5, "Estatística": 5,
+                        "Matemática": 5, "Física": 5, "Química": 5, "Biologia": 5, "Direito Constitucional": 8,
+                        "Direito Administrativo": 7, "Legislação dos Militares de PE": 10, "Direito Penal Militar": 5}
+        pesos_prova, data_prova = {}, None
+        r_ed = conn.execute("SELECT conteudo FROM editais WHERE nome = ?", (meta_nome,)).fetchone()
+        if r_ed:
+            try:
+                import json as _jd
+                ed = _jd.loads(r_ed[0])
+                pesos_prova = {m['nome']: float(m.get('questoes') or m.get('pontos') or 0) for m in ed.get('materias', [])
+                               if m.get('tipo') != 'redacao'}
+                data_prova = datetime.date.fromisoformat(ed.get('data_prova'))
+            except Exception:
+                pass
+        if meta_nome == CRONO_META_NOME:
+            pesos_prova, data_prova = QUESTOES_CFO, datetime.date(2027, 2, 28)
+        SEM_QUESTOES = {"Redação", "Revisão", "Simulados"}
+
+        # Metas (editáveis no fim da página)
+        meta_h = float(get_config("meta_horas_semana", "20"))
+        meta_q = int(float(get_config("meta_questoes_semana", "100")))
+
+        # ---------------- dados ----------------
+        ex = pd.read_sql_query("""SELECT e.data, e.acertos, e.erros, m.nome AS materia, t.nome AS topico
+                                  FROM exercicios e JOIN topicos t ON e.topico_id = t.id JOIN materias m ON t.materia_id = m.id
+                                  WHERE m.meta_id = ?""", conn, params=(m_id,))
+        ex['data'] = pd.to_datetime(ex['data']).dt.date
+        ex['assunto'] = ex['topico'].apply(limpar_nome_topico)
+        ex['total'] = ex['acertos'] + ex['erros']
+        ses = pd.read_sql_query("""SELECT s.data, s.minutos, m.nome AS materia FROM sessoes s
+                                   JOIN topicos t ON s.topico_id = t.id JOIN materias m ON t.materia_id = m.id
+                                   WHERE m.meta_id = ?""", conn, params=(m_id,))
+        ses['data'] = pd.to_datetime(ses['data']).dt.date
+        bl = pd.read_sql_query("""SELECT t.semana, t.dia, t.status, COALESCE(t.minutos_planejados, 0) AS prev,
+                                         COALESCE(t.minutos_estudados, 0) AS feito, m.nome AS materia
+                                  FROM topicos t JOIN materias m ON t.materia_id = m.id
+                                  WHERE m.meta_id = ? AND t.semana IS NOT NULL""", conn, params=(m_id,))
+        escalas = set(ler_escalas(m_id))
+
+        # posição de hoje no cronograma (índice de dia útil)
+        dias_desde = (hoje - inicio).days
+        sem_hoje = dias_desde // 7
+        idx_hoje = sem_hoje * 5 + min(hoje.weekday(), 5)  # no fim de semana, a semana inteira já "passou"
+        bl['idx'] = (bl['semana'] - 1) * 5 + bl['dia']
+        vencidos = bl[bl['idx'] < idx_hoje]
+        atrasados = vencidos[vencidos['status'] != 'Concluído']
+
+        min_dia_14 = ses.groupby('data')['minutos'].sum().to_dict() if not ses.empty else {}
+        seg = hoje - datetime.timedelta(days=hoje.weekday())
+        min_semana = int(ses[ses['data'] >= seg]['minutos'].sum()) if not ses.empty else 0
+        esc_semana = sum(1 for d in escalas if seg <= datetime.date.fromisoformat(d) < seg + datetime.timedelta(days=5))
+        meta_semana_h = max(0.0, meta_h * (5 - esc_semana) / 5)
+        dias_uteis_passados = min(hoje.weekday() + 1, 5)
+
+        def acerto(df):
+            t = int(df['total'].sum()) if not df.empty else 0
+            return (round(100 * df['acertos'].sum() / t) if t else None), t
+        p14, n14 = acerto(ex[ex['data'] > hoje - datetime.timedelta(days=14)])
+        p28, n28 = acerto(ex[(ex['data'] <= hoje - datetime.timedelta(days=14)) & (ex['data'] > hoje - datetime.timedelta(days=28))])
+
+        # ---------------- 1. alertas ----------------
+        alertas = []
+        if len(atrasados):
+            alertas.append(("warning", f"**{len(atrasados)} bloco(s) atrasado(s)** até ontem. Reponha no fim de semana "
+                                       f"(lista em 🗓️ Cronograma Semanal)."))
+        esperado = meta_semana_h * min(dias_uteis_passados, 5) / 5
+        if hoje.weekday() < 5 and esperado > 0 and min_semana / 60 < 0.7 * esperado:
+            alertas.append(("warning", f"**Horas abaixo do ritmo:** {min_semana / 60:.1f} h nesta semana; "
+                                       f"o esperado até hoje era {esperado:.1f} h."))
+        if not ex.empty:
+            ult = max(ex['data'])
+            if (hoje - ult).days >= 3:
+                alertas.append(("warning", f"**Nenhuma questão registrada há {(hoje - ult).days} dias.**"))
+        por_mat = []
+        for mat, g in ex[~ex['materia'].isin(SEM_QUESTOES)].groupby('materia'):
+            p, n = acerto(g)
+            pa, na = acerto(g[g['data'] > hoje - datetime.timedelta(days=14)])
+            pb, nb = acerto(g[(g['data'] <= hoje - datetime.timedelta(days=14)) & (g['data'] > hoje - datetime.timedelta(days=28))])
+            por_mat.append((mat, p, n))
+            if n >= 10 and p < 50:
+                alertas.append(("error", f"**{mat} está crítica:** {p}% de acerto em {n} questões."))
+            if na >= 5 and nb >= 5 and pa <= pb - 10:
+                alertas.append(("warning", f"**{mat} caiu:** {pb}% → {pa}% nos últimos 14 dias."))
+        if alertas:
+            for tipo, txt in alertas[:5]:
+                getattr(st, tipo)(txt)
+        else:
+            st.success("Nada pedindo atenção agora. Continue no ritmo.")
+
+        # ---------------- 2. cartões ----------------
+        c1, c2 = st.columns(2)
+        c3, c4 = st.columns(2)
+        horas_14 = [round(min_dia_14.get(hoje - datetime.timedelta(days=i), 0) / 60, 1) for i in range(13, -1, -1)]
+        acerto_sem = []
+        if not ex.empty:
+            for _, g in ex.assign(sem=ex['data'].apply(lambda d: d - datetime.timedelta(days=d.weekday()))).groupby('sem'):
+                acerto_sem.append(round(100 * g['acertos'].sum() / max(1, g['total'].sum())))
+        c1.metric("Ritmo do cronograma", "Em dia" if not len(atrasados) else f"{len(atrasados)} atrasado(s)",
+                  f"{int((vencidos['status'] == 'Concluído').sum())} de {len(vencidos)} blocos até ontem",
+                  delta_color="off", delta_arrow="off", border=True)
+        c2.metric("Horas nesta semana", f"{min_semana / 60:.1f} h", f"meta {meta_semana_h:.0f} h"
+                  + (f" ({esc_semana} dia(s) de escala)" if esc_semana else ""), delta_color="off", delta_arrow="off",
+                  border=True, chart_data=horas_14, chart_type="bar", help="Minigráfico: horas por dia nos últimos 14 dias.")
+        c3.metric("Acerto (últimos 14 dias)", f"{p14}%" if p14 is not None else "–",
+                  (f"{p14 - p28:+d} pontos vs 14 dias antes" if (p14 is not None and p28 is not None) else f"{n14} questões"),
+                  delta_color="normal" if (p14 is not None and p28 is not None) else "off",
+                  delta_arrow="auto" if (p14 is not None and p28 is not None) else "off", border=True,
+                  chart_data=acerto_sem[-8:] or None, help="Minigráfico: % de acerto semana a semana.")
+        if data_prova:
+            c4.metric("Dias até a prova", (data_prova - hoje).days, f"{data_prova:%d/%m/%Y}",
+                      delta_color="off", delta_arrow="off", border=True)
+
+        # bullet graph das horas da semana: faixas cinza (ruim/regular/bom), barra azul, traço na meta
+        if meta_semana_h > 0:
+            topo = max(meta_semana_h * 1.2, min_semana / 60)
+            faixas_df = pd.DataFrame({"ini": [0, meta_semana_h * 0.5, meta_semana_h * 0.8],
+                                      "fim": [meta_semana_h * 0.5, meta_semana_h * 0.8, topo],
+                                      "faixa": ["abaixo de 50%", "50% a 80%", "80% ou mais"]})
+            base = alt.Chart(faixas_df).mark_bar(height=26).encode(
+                x=alt.X("ini:Q", title="horas nesta semana", scale=alt.Scale(domain=[0, topo])), x2="fim:Q",
+                color=alt.Color("faixa:N", scale=alt.Scale(domain=["abaixo de 50%", "50% a 80%", "80% ou mais"],
+                                                           range=["#c9ccd1", "#dcdfe3", "#eceef0"]), legend=None),
+                tooltip=["faixa"])
+            barra = alt.Chart(pd.DataFrame({"h": [min_semana / 60]})).mark_bar(height=10, color=AZUL).encode(
+                x="h:Q", tooltip=[alt.Tooltip("h:Q", title="estudadas (h)", format=".1f")])
+            alvo = alt.Chart(pd.DataFrame({"m": [meta_semana_h]})).mark_tick(color="#202124", thickness=3, size=30).encode(
+                x="m:Q", tooltip=[alt.Tooltip("m:Q", title="meta (h)", format=".0f")])
+            st.altair_chart((base + barra + alvo).properties(height=60), use_container_width=True)
+            st.caption("Barra azul = horas estudadas · traço preto = meta da semana · faixas: abaixo de 50%, 50 a 80% e 80% ou mais da meta.")
+
+        # ---------------- 3. calendário de constância ----------------
+        st.subheader("📅 Constância")
+        ini_cal = max(inicio, hoje - datetime.timedelta(weeks=12))
+        ini_cal -= datetime.timedelta(days=ini_cal.weekday())
+        dias = [ini_cal + datetime.timedelta(days=i) for i in range((hoje - ini_cal).days + 1)]
+        min_dia = ses.groupby('data')['minutos'].sum().to_dict() if not ses.empty else {}
+        q_dia = ex.groupby('data')['total'].sum().to_dict() if not ex.empty else {}
+        nomes_dia = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
+        cal = pd.DataFrame([{
+            "data": d.strftime("%d/%m"), "semana": d - datetime.timedelta(days=d.weekday()),
+            "dia": nomes_dia[d.weekday()], "minutos": int(min_dia.get(d, 0)), "questoes": int(q_dia.get(d, 0)),
+            "tipo": "Escala" if d.isoformat() in escalas else ("Estudou" if min_dia.get(d, 0) > 0 or q_dia.get(d, 0) > 0
+                                                             else "Sem registro")} for d in dias])
+        # grade de quadrados (HTML simples: fica igual no celular e no computador)
+        def cor_dia(row):
+            if row['tipo'] == "Escala":
+                return "#5f6368"
+            if row['tipo'] == "Sem registro":
+                return CINZA_CLARO
+            t = min(1.0, max(row['minutos'], 30) / 240)
+            c0, c1_ = (0xb7, 0xd3, 0xf6), (0x10, 0x42, 0x81)
+            return "#%02x%02x%02x" % tuple(int(c0[i] + (c1_[i] - c0[i]) * t) for i in range(3))
+        cal['cor'] = cal.apply(cor_dia, axis=1)
+        semanas = sorted(cal['semana'].unique())
+        celula = "width:20px;height:20px;border-radius:4px;margin:2px;display:inline-block"
+        html = ['<div style="overflow-x:auto"><table style="border-collapse:collapse">']
+        for nd in nomes_dia:
+            html.append(f'<tr><td style="font-size:11px;color:#6b7280;padding-right:6px">{nd}</td>')
+            for sm in semanas:
+                r = cal[(cal['semana'] == sm) & (cal['dia'] == nd)]
+                if r.empty:
+                    html.append(f'<td><span style="{celula}"></span></td>')
                 else:
-                    niveis_lista = []
-                    
-                    q_top = "SELECT t.status, t.teoria FROM topicos t JOIN materias m ON t.materia_id = m.id WHERE m.meta_id = ?"
-                    df_top_meta = pd.read_sql_query(q_top, conn, params=(int(m_id),))
-                    
-                    total_t = len(df_top_meta)
-                    conc_t = len(df_top_meta[(df_top_meta['status'] == 'Concluído') | (df_top_meta['teoria'] == 1)])
-                    parc_t = len(df_top_meta[(df_top_meta['status'] == 'Parcial') & (df_top_meta['teoria'] == 0)])
-                    
-                    pontos_progresso = conc_t + (parc_t * 0.5)
-                    pct = (pontos_progresso / total_t * 100) if total_t > 0 else 0
-                    
-                    for _, r_mat in df_mats.iterrows():
-                        nv = calcular_nivel_materia(r_mat['id'], conn)
-                        
-                        df_tm = pd.read_sql_query("SELECT status, teoria FROM topicos WHERE materia_id = ?", conn, params=(int(r_mat['id']),))
-                        t_mat_total = len(df_tm)
-                        t_mat_conc = len(df_tm[(df_tm['status'] == 'Concluído') | (df_tm['teoria'] == 1)])
-                        pct_mat = (t_mat_conc / t_mat_total * 100) if t_mat_total > 0 else 0
-                        
-                        niveis_lista.append({
-                            "Matéria": r_mat['nome'], 
-                            "Tópicos Concluídos": f"{t_mat_conc}/{t_mat_total}",
-                            "Avanço (%)": f"{pct_mat:.1f}%",
-                            "Nível Domínio": nv
-                        })
-                    
-                    df_niv = pd.DataFrame(niveis_lista)
-                    media_geral = df_niv['Nível Domínio'].mean()
-                    
-                    col_x, col_y, col_z = st.columns(3)
-                    col_x.metric("Avanço do Edital", f"{pct:.1f}%", f"{conc_t}/{total_t} tópicos")
-                    col_y.metric("Domínio Médio Geral", f"{media_geral:.1f} / 10")
-                    col_z.progress(min(1.0, pct / 100))
-                    
-                    st.subheader("🎯 Nível de Domínio e Avanço por Matéria")
-                    st.dataframe(df_niv, use_container_width=True, hide_index=True)
+                    r = r.iloc[0]
+                    dica = f"{r['data']}: {r['tipo'].lower()}, {r['minutos']} min, {r['questoes']} questões"
+                    html.append(f'<td><span title="{dica}" style="{celula};background:{r["cor"]}"></span></td>')
+            html.append("</tr>")
+        html.append('<tr><td></td>' + "".join(
+            f'<td style="font-size:10px;color:#6b7280;text-align:center">{sm:%d/%m}</td>' if i % 2 == 0 else "<td></td>"
+            for i, sm in enumerate(semanas)) + "</tr></table></div>")
+        legenda = (f'<div style="font-size:12px;color:#6b7280;margin-top:4px">'
+                   f'<span style="{celula};background:{CINZA_CLARO};vertical-align:middle"></span> sem registro &nbsp; '
+                   f'<span style="{celula};background:#b7d3f6;vertical-align:middle"></span> pouco &nbsp; '
+                   f'<span style="{celula};background:{AZUL_ESCURO};vertical-align:middle"></span> 4 h ou mais &nbsp; '
+                   f'<span style="{celula};background:#5f6368;vertical-align:middle"></span> escala</div>')
+        st.markdown("".join(html) + legenda, unsafe_allow_html=True)
+        dias_uteis = [d for d in dias if d.weekday() < 5 and d <= hoje and d >= inicio and d.isoformat() not in escalas]
+        dias_ok = sum(1 for d in dias_uteis if min_dia.get(d, 0) > 0 or q_dia.get(d, 0) > 0)
+        st.caption(f"Quanto mais escuro, mais tempo estudado. Dias úteis com estudo registrado: **{dias_ok} de {len(dias_uteis)}** "
+                   f"(dias de escala não contam).")
 
-                    # NOVO: horas do cronograma
-                    if meta_tem_cronograma(m_id, conn):
-                        st.subheader("⏱️ Horas do Cronograma")
-                        df_h = pd.read_sql_query("""
-                            SELECT m.nome as Matéria,
-                                   ROUND(SUM(COALESCE(t.minutos_planejados, 0)) / 60.0, 1) as Previstas_h,
-                                   ROUND(SUM(COALESCE(t.minutos_estudados, 0)) / 60.0, 1) as Estudadas_h
-                            FROM topicos t JOIN materias m ON t.materia_id = m.id
-                            WHERE m.meta_id = ? AND t.semana IS NOT NULL
-                            GROUP BY m.nome ORDER BY Previstas_h DESC
-                        """, conn, params=(int(m_id),))
-                        tot_prev, tot_est = df_h['Previstas_h'].sum(), df_h['Estudadas_h'].sum()
-                        h1, h2 = st.columns(2)
-                        h1.metric("Horas estudadas", f"{tot_est:.1f} h", f"de {tot_prev:.0f} h previstas", delta_color="off")
-                        h2.progress(min(1.0, tot_est / tot_prev) if tot_prev else 0.0)
-                        df_h['Feito'] = (df_h['Estudadas_h'] / df_h['Previstas_h'].where(df_h['Previstas_h'] > 0)).fillna(0).clip(upper=1.0)
-                        st.dataframe(
-                            df_h,
-                            column_config={
-                                "Previstas_h": st.column_config.NumberColumn("Previstas (h)", format="%.1f"),
-                                "Estudadas_h": st.column_config.NumberColumn("Estudadas (h)", format="%.1f"),
-                                "Feito": st.column_config.ProgressColumn("Progresso", min_value=0.0, max_value=1.0)
-                            },
-                            use_container_width=True, hide_index=True
-                        )
+        # ---------------- 4. evolução ----------------
+        st.subheader("📈 Estou evoluindo?")
+        if ex.empty:
+            st.info("Registre questões em 📝 Registrar Questões para ver a sua evolução semana a semana.")
+        else:
+            ex['semana'] = pd.to_datetime(ex['data'].apply(lambda d: d - datetime.timedelta(days=d.weekday())))
+            ev = ex.groupby('semana').agg(acertos=('acertos', 'sum'), total=('total', 'sum')).reset_index()
+            ev['acerto'] = (100 * ev['acertos'] / ev['total']).round(0)
+            bandas = pd.DataFrame({"de": [0, 50, 75], "ate": [50, 75, 100], "faixa": ["crítico", "fraco", "forte"]})
+            fundo = alt.Chart(bandas).mark_rect(opacity=0.5).encode(
+                y=alt.Y("de:Q", scale=alt.Scale(domain=[0, 100]), title="% de acerto"), y2="ate:Q",
+                color=alt.Color("faixa:N", scale=alt.Scale(domain=["crítico", "fraco", "forte"], range=["#e6e7ea", "#f1f2f4", "#fafafa"]),
+                                legend=None))
+            rotulos = alt.Chart(bandas).mark_text(align="left", dx=4, dy=10, color="#6b7280", fontSize=11).encode(
+                y="ate:Q", text="faixa:N", x=alt.value(0))
+            linha = alt.Chart(ev).mark_line(color=AZUL, strokeWidth=2, point=alt.OverlayMarkDef(size=70, filled=True, color=AZUL)).encode(
+                x=alt.X("semana:T", title=None, axis=alt.Axis(format="%d/%m", tickCount="week")),
+                y=alt.Y("acerto:Q", scale=alt.Scale(domain=[0, 100])),
+                tooltip=[alt.Tooltip("semana:T", title="semana de", format="%d/%m"), alt.Tooltip("acerto:Q", title="% acerto"),
+                         alt.Tooltip("total:Q", title="questões")])
+            st.altair_chart((fundo + rotulos + linha).properties(height=220), use_container_width=True)
+            qs = alt.Chart(ev).mark_bar(color=CINZA, cornerRadiusTopLeft=4, cornerRadiusTopRight=4, size=22).encode(
+                x=alt.X("semana:T", title=None, axis=alt.Axis(format="%d/%m", tickCount="week")),
+                y=alt.Y("total:Q", title="questões na semana"),
+                tooltip=[alt.Tooltip("semana:T", title="semana de", format="%d/%m"), alt.Tooltip("total:Q", title="questões")])
+            meta_linha = alt.Chart(pd.DataFrame({"q": [meta_q]})).mark_rule(color="#202124", strokeDash=[4, 3]).encode(y="q:Q")
+            st.altair_chart((qs + meta_linha).properties(height=160), use_container_width=True)
+            st.caption(f"Linha azul = seu % de acerto por semana (faixas: crítico < 50%, fraco 50–75%, forte > 75%). "
+                       f"Barras = questões feitas por semana; tracejado = meta de {meta_q}.")
 
-                        df_s = pd.read_sql_query("""
-                            SELECT t.semana as Semana,
-                                   ROUND(100.0 * SUM(CASE WHEN t.status = 'Concluído' THEN 1 ELSE 0 END) / COUNT(*), 0) as Concluído_pct
-                            FROM topicos t JOIN materias m ON t.materia_id = m.id
-                            WHERE m.meta_id = ? AND t.semana IS NOT NULL
-                            GROUP BY t.semana ORDER BY t.semana
-                        """, conn, params=(int(m_id),))
-                        st.markdown("**% de blocos concluídos por semana**")
-                        st.bar_chart(df_s.set_index('Semana'))
+        # ---------------- 5. matérias ----------------
+        st.subheader("📚 Matérias – da que mais precisa de atenção para a que menos")
+        linhas = []
+        for mat in sorted(set(bl['materia']) - SEM_QUESTOES):
+            g = ex[ex['materia'] == mat]
+            p, n = acerto(g)
+            semanal = []
+            if not g.empty:
+                gs = g.assign(sem=g['data'].apply(lambda d: d - datetime.timedelta(days=d.weekday()))).groupby('sem')
+                semanal = [round(100 * x['acertos'].sum() / x['total'].sum()) for _, x in gs][-8:]
+            bm = bl[bl['materia'] == mat]
+            prev_ate = bm[bm['idx'] < idx_hoje]['prev'].sum()
+            linhas.append({"Situação": faixa(p, n), "Matéria": mat, "Acerto": p,
+                           "Tendência": semanal, "Questões": n,
+                           "Horas": round(bm['feito'].sum() / 60, 1), "Previsto até hoje (h)": round(prev_ate / 60, 1),
+                           "Na prova": int(pesos_prova.get(mat, 0)) or None, "_ord": p if p is not None else 999})
+        tab = pd.DataFrame(linhas).sort_values(["_ord", "Na prova"], ascending=[True, False]).drop(columns="_ord")
+        tab = tab[["Situação", "Matéria", "Acerto", "Questões", "Tendência", "Horas", "Previsto até hoje (h)", "Na prova"]]
+        st.dataframe(tab, hide_index=True, use_container_width=True, column_config={
+            "Acerto": st.column_config.ProgressColumn("Acerto (%)", min_value=0, max_value=100, format="%d%%", color=AZUL),
+            "Tendência": st.column_config.LineChartColumn("Tendência (semanas)", y_min=0, y_max=100),
+            "Horas": st.column_config.NumberColumn("Horas estudadas", format="%.1f"),
+            "Na prova": st.column_config.NumberColumn("Questões na prova")})
+        st.caption("⚪ pouco dado = menos de 10 questões registradas (ainda não dá para concluir). "
+                   "🔴 abaixo de 50% · 🟡 de 50% a 75% · 🟢 acima de 75% (mesmos cortes do QConcursos).")
+
+        # ---------------- 6. mapa de dificuldades e facilidades ----------------
+        st.subheader("🎯 Mapa de dificuldades e facilidades")
+        if ex.empty:
+            st.info("Aparece quando houver questões registradas.")
+        else:
+            ass = ex.groupby(['materia', 'assunto']).agg(acertos=('acertos', 'sum'), total=('total', 'sum')).reset_index()
+            ass = ass[ass['total'] >= 5]
+            if ass.empty:
+                st.info("Registre pelo menos 5 questões em um assunto para ele entrar no mapa.")
+            else:
+                ass['Acerto'] = (100 * ass['acertos'] / ass['total']).round(0).astype(int)
+                ass = ass.rename(columns={'materia': 'Matéria', 'assunto': 'Assunto', 'total': 'Questões'})
+                cfg = {"Acerto": st.column_config.ProgressColumn("Acerto (%)", min_value=0, max_value=100, format="%d%%", color=AZUL)}
+                st.markdown("**🔻 Revisar primeiro (menor acerto)**")
+                st.dataframe(ass.sort_values('Acerto').head(5)[['Assunto', 'Acerto', 'Questões', 'Matéria']],
+                             hide_index=True, use_container_width=True, column_config=cfg)
+                st.markdown("**🔺 Já firmes (maior acerto)**")
+                st.dataframe(ass.sort_values('Acerto', ascending=False).head(5)[['Assunto', 'Acerto', 'Questões', 'Matéria']],
+                             hide_index=True, use_container_width=True, column_config=cfg)
+
+        # ---------------- 7. onde você perde mais pontos ----------------
+        if pesos_prova:
+            st.subheader("💸 Onde você perde mais pontos na prova")
+            risco = [{"Matéria": m, "Perdidas": round((100 - p) / 100 * pesos_prova[m], 1), "acerto": p, "n": n}
+                     for m, p, n in por_mat if m in pesos_prova and n >= 5]
+            if not risco:
+                st.info("Aparece quando houver pelo menos 5 questões registradas numa matéria.")
+            else:
+                dr = pd.DataFrame(risco).sort_values("Perdidas", ascending=False)
+                ch = alt.Chart(dr).mark_bar(color=AZUL, cornerRadiusTopRight=4, cornerRadiusBottomRight=4, height=18).encode(
+                    x=alt.X("Perdidas:Q", title="questões que você perderia na prova, no seu acerto atual"),
+                    y=alt.Y("Matéria:N", sort="-x", title=None, axis=alt.Axis(labelLimit=260)),
+                    tooltip=["Matéria", alt.Tooltip("Perdidas:Q", title="questões perdidas"),
+                             alt.Tooltip("acerto:Q", title="% acerto"), alt.Tooltip("n:Q", title="questões feitas")])
+                txt = ch.mark_text(align="left", dx=4, color="#3c4043").encode(text=alt.Text("Perdidas:Q", format=".1f"))
+                st.altair_chart((ch + txt).properties(height=max(120, 34 * len(dr))), use_container_width=True)
+                sem_dado = [m for m in pesos_prova if m not in set(dr['Matéria'])]
+                st.caption("Cálculo: (100% − seu acerto) × questões da matéria no edital. O topo da lista é onde "
+                           "estudar rende mais pontos. Sem dados ainda: " + (", ".join(sem_dado) if sem_dado else "nenhuma") + ".")
+
+        # ---------------- metas ----------------
+        with st.expander("⚙️ Ajustar minhas metas"):
+            nh = st.number_input("Meta de horas por semana", min_value=1.0, max_value=80.0, value=meta_h, step=1.0)
+            nq = st.number_input("Meta de questões por semana", min_value=0, max_value=1000, value=meta_q, step=10)
+            if st.button("💾 Salvar metas"):
+                set_config("meta_horas_semana", nh)
+                set_config("meta_questoes_semana", nq)
+                ok_h = float(get_config("meta_horas_semana", "0")) == float(nh)
+                avisar(f"Metas salvas: {nh:.0f} h e {nq} questões por semana." if ok_h else "As metas NÃO foram salvas. Tente de novo.",
+                       "success" if ok_h else "error")
+                st.rerun()
 
 # =============================================================================
 # MENU 5: GERENCIADOR

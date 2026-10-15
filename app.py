@@ -872,11 +872,48 @@ def salvar_status_com_aviso(conn, topico_id, status, minutos=None):
     except Exception as e:
         avisar(f"NÃO foi salvo. Erro: {e}", "error")
 
+# -----------------------------------------------------------------------------
+# NOVO: DIA DE ESCALA – desloca o cronograma inteiro 1 dia útil para frente
+# -----------------------------------------------------------------------------
+import json as _json_esc
+
+def ler_escalas(meta_id):
+    try:
+        return _json_esc.loads(get_config(f"escalas_{meta_id}", "[]"))
+    except Exception:
+        return []
+
+def gravar_escalas(meta_id, lista):
+    set_config(f"escalas_{meta_id}", _json_esc.dumps(sorted(set(lista))))
+
+def deslocar_cronograma(conn, meta_id, a_partir_idx, passo):
+    """Move em 'passo' dias úteis todos os blocos cujo índice (semana-1)*5+dia seja >= a_partir_idx.
+    Sábado e domingo não contam: o bloco de sexta vai para a segunda seguinte."""
+    inicio = datetime.date.fromisoformat(get_config(f"cronograma_inicio_{meta_id}", CRONO_INICIO.isoformat()))
+    linhas = conn.execute("""SELECT t.id, t.nome, t.semana, t.dia FROM topicos t JOIN materias m ON t.materia_id = m.id
+                             WHERE m.meta_id = ? AND t.semana IS NOT NULL""", (int(meta_id),)).fetchall()
+    movidos = 0
+    for tid, nome, sem, dia in linhas:
+        idx = (int(sem) - 1) * 5 + int(dia)
+        if idx >= a_partir_idx:
+            novo = idx + passo
+            nsem, ndia = novo // 5 + 1, novo % 5
+            conn.execute("UPDATE topicos SET semana = ?, dia = ?, nome = ? WHERE id = ?",
+                         (nsem, ndia, nome_topico_crono(nsem, ndia, topico_sem_prefixo(nome), inicio), tid))
+            movidos += 1
+    conn.commit()
+    return movidos
+
+def ultima_data_cronograma(conn, meta_id):
+    inicio = datetime.date.fromisoformat(get_config(f"cronograma_inicio_{meta_id}", CRONO_INICIO.isoformat()))
+    r = conn.execute("""SELECT MAX((t.semana - 1) * 5 + t.dia) FROM topicos t JOIN materias m ON t.materia_id = m.id
+                        WHERE m.meta_id = ? AND t.semana IS NOT NULL""", (int(meta_id),)).fetchone()[0]
+    return None if r is None else inicio + datetime.timedelta(weeks=r // 5, days=r % 5)
+
 menu = st.sidebar.radio("Navegação", [
     "📅 Meta & Rotina do Dia",
     "🧭 Planejar Estudos",
     "🗓️ Cronograma Semanal",
-    "📋 Checklist & Acompanhamento",
     "🎯 Simulado do que já estudei",
     "📝 Registrar Questões", 
     "📊 Dashboard de Evolução", 
@@ -930,217 +967,155 @@ ajuste_estatuto_14_10(conn)
 if menu == "📅 Meta & Rotina do Dia":
     st.header("🎯 Sugestão Diária de Estudo e Rotina Policial")
     
-    escalado = st.checkbox("🚨 Estarei Escalado Hoje / Plantão Extra (Suspender estudos hoje)", value=False)
+    df_metas = pd.read_sql_query("SELECT id, nome FROM metas WHERE ativa = 1", conn)
     
-    if escalado:
-        st.warning("⚠️ **Modo Plantão/Escala Ativado:** O ciclo de estudos foi pausado para hoje. Bons serviços no plantão!")
+    if df_metas.empty:
+        st.warning("Nenhum objetivo cadastrado. Carregue o cronograma em ⚙️ Gerenciador → 📅 Cronogramas.")
     else:
-        horas_disp = float(get_config("horas_estudo_dia", "3.0"))
-        turno_pref = get_config("turno_estudo", "Noite")
-        
-        st.info(f"💡 **Disponibilidade Hoje:** {horas_disp} horas no turno da **{turno_pref}**.")
-        
-        df_metas = pd.read_sql_query("SELECT id, nome FROM metas WHERE ativa = 1", conn)
-        
-        if df_metas.empty:
-            st.warning("Nenum objetivo cadastrado. Cadastre um em '⚙️ Gerenciador'.")
-        else:
-            meta_sel_rotina = st.selectbox("Selecione o Objetivo do Dia:", df_metas['nome'].tolist())
-            meta_id_rotina = df_metas[df_metas['nome'] == meta_sel_rotina]['id'].values[0]
+        meta_sel_rotina = st.selectbox("Selecione o Objetivo do Dia:", df_metas['nome'].tolist())
+        meta_id_rotina = df_metas[df_metas['nome'] == meta_sel_rotina]['id'].values[0]
 
-            # NOVO: se o objetivo tem cronograma, mostra os blocos de hoje
-            if meta_tem_cronograma(meta_id_rotina, conn):
-                semana_hoje, dia_hoje = semana_e_dia_de_hoje(meta_id_rotina)
-                n_semanas = total_semanas(meta_id_rotina, conn)
-                inicio_rot = datetime.date.fromisoformat(get_config(f"cronograma_inicio_{meta_id_rotina}", CRONO_INICIO.isoformat()))
-                if semana_hoje < 1:
-                    st.info(f"📆 O cronograma começa na segunda-feira, {inicio_rot:%d/%m/%Y}.")
-                elif semana_hoje > n_semanas:
-                    st.success(f"🏁 O cronograma de {n_semanas} semanas terminou. Boa prova!")
-                elif dia_hoje > 4:
-                    st.info(f"📆 Hoje é fim de semana (semana {semana_hoje}). Use o tempo livre para repor o que ficou pendente:")
-                    df_pend = pd.read_sql_query("""
-                        SELECT t.nome as Tópico, m.nome as Matéria, t.status as Status
-                        FROM topicos t JOIN materias m ON t.materia_id = m.id
-                        WHERE m.meta_id = ? AND t.semana = ? AND t.status != 'Concluído'
-                        ORDER BY t.dia, t.ordem
-                    """, conn, params=(int(meta_id_rotina), int(semana_hoje)))
-                    if df_pend.empty:
-                        st.success("🎉 Nada pendente nesta semana!")
-                    else:
-                        st.dataframe(df_pend, use_container_width=True, hide_index=True)
+        # NOVO: se o objetivo tem cronograma, mostra os blocos de hoje
+        if meta_tem_cronograma(meta_id_rotina, conn):
+            semana_hoje, dia_hoje = semana_e_dia_de_hoje(meta_id_rotina)
+            n_semanas = total_semanas(meta_id_rotina, conn)
+            inicio_rot = datetime.date.fromisoformat(get_config(f"cronograma_inicio_{meta_id_rotina}", CRONO_INICIO.isoformat()))
+            if semana_hoje < 1:
+                st.info(f"📆 O cronograma começa na segunda-feira, {inicio_rot:%d/%m/%Y}.")
+            elif semana_hoje > n_semanas:
+                st.success(f"🏁 O cronograma de {n_semanas} semanas terminou. Boa prova!")
+            elif dia_hoje > 4:
+                st.info(f"📆 Hoje é fim de semana (semana {semana_hoje}). Use o tempo livre para repor o que ficou pendente:")
+                df_pend = pd.read_sql_query("""
+                    SELECT t.nome as Tópico, m.nome as Matéria, t.status as Status
+                    FROM topicos t JOIN materias m ON t.materia_id = m.id
+                    WHERE m.meta_id = ? AND t.semana = ? AND t.status != 'Concluído'
+                    ORDER BY t.dia, t.ordem
+                """, conn, params=(int(meta_id_rotina), int(semana_hoje)))
+                if df_pend.empty:
+                    st.success("🎉 Nada pendente nesta semana!")
                 else:
-                    st.subheader(f"📆 Semana {semana_hoje} · {DIAS_SEMANA[dia_hoje]} – blocos de hoje")
-                    df_hoje = pd.read_sql_query("""
-                        SELECT t.id, t.nome, t.bloco, t.minutos_planejados, t.minutos_estudados, t.status, m.nome as materia
-                        FROM topicos t JOIN materias m ON t.materia_id = m.id
-                        WHERE m.meta_id = ? AND t.semana = ? AND t.dia = ?
-                        ORDER BY t.ordem
-                    """, conn, params=(int(meta_id_rotina), int(semana_hoje), int(dia_hoje)))
-                    if df_hoje.empty:
-                        st.info("Nenhum bloco previsto para hoje.")
-                    for _, row in df_hoje.iterrows():
-                        topico_id = int(row['id'])
-                        minutos_plan = int(row['minutos_planejados'] or 0)
-                        icone = "✅" if row['status'] == "Concluído" else ("⏳" if row['status'] == "Parcial" else "📖")
-                        with st.expander(f"{icone} **{row['bloco']} · {row['materia']}** | {minutos_plan} min", expanded=row['status'] != "Concluído"):
-                            st.markdown(f"**Conteúdo:** {row['nome'].split(' · ', 1)[-1]}")
-                            orientacao = buscar_orientacao(conn, row['materia'], row['nome'])
-                            if orientacao:
-                                st.info("📌 **Orientação**\n\n" + orientacao)
-                            if st.toggle("✏️ Escrever ou editar a orientação", key=f"ori_tg_{topico_id}"):
-                                novo_txt = st.text_area("Orientação", value=orientacao, height=150,
-                                                        key=f"ori_{topico_id}", label_visibility="collapsed")
-                                if st.button("💾 Salvar orientação", key=f"ori_salvar_{topico_id}"):
-                                    try:
-                                        salvar_orientacao(conn, row['materia'], row['nome'], novo_txt)
-                                        avisar("Orientação salva e conferida." if buscar_orientacao(conn, row['materia'], row['nome']) == novo_txt.strip()
-                                               else "Orientação apagada." if not novo_txt.strip() else "A orientação não foi confirmada no banco. Tente de novo.",
-                                               "success" if buscar_orientacao(conn, row['materia'], row['nome']) == novo_txt.strip() or not novo_txt.strip() else "error")
-                                    except Exception as e:
-                                        avisar(f"Orientação NÃO salva. Erro: {e}", "error")
-                                    st.rerun()
-                            st.write(f"**Status:** `{row['status']}` · **Minutos registrados:** {int(row['minutos_estudados'] or 0)}")
-
-                            timer_data = get_timer_state(topico_id, minutos_plan * 60)
-                            seg_restantes = timer_data['restante']
-                            if timer_data['status'] == 'FINISHED':
-                                st.success("🔔 Tempo do bloco concluído!")
-                            st.markdown(f"### ⏳ `{seg_restantes // 3600:02d}:{(seg_restantes % 3600) // 60:02d}:{seg_restantes % 60:02d}`")
-                            c1, c2, c3 = st.columns(3)
-                            with c1:
-                                if st.button("▶️ Iniciar / Continuar", key=f"cr_start_{topico_id}"):
-                                    set_timer_start(topico_id, seg_restantes)
-                                    st.rerun()
-                            with c2:
-                                if st.button("⏸️ Pausar", key=f"cr_pause_{topico_id}"):
-                                    set_timer_pause(topico_id, seg_restantes)
-                                    st.rerun()
-                            with c3:
-                                if st.button("🔄 Zerar", key=f"cr_reset_{topico_id}"):
-                                    set_timer_stop(topico_id)
-                                    st.rerun()
-
-                            # minutos já cronometrados neste bloco
-                            minutos_cronometrados = max(0, round((minutos_plan * 60 - seg_restantes) / 60)) if timer_data['status'] != 'STOPPED' else 0
-
-                            minutos_ja = int(row['minutos_estudados'] or 0)
-                            col_a, col_b = st.columns(2)
-                            with col_a:
-                                if st.button("✅ Concluí este bloco", key=f"cr_conc_{topico_id}"):
-                                    if minutos_cronometrados > 0:
-                                        minutos = minutos_ja + minutos_cronometrados
-                                    else:
-                                        minutos = minutos_ja if minutos_ja > 0 else minutos_plan
-                                    salvar_status_com_aviso(conn, topico_id, "Concluído", minutos)
-                                    set_timer_stop(topico_id)
-                                    st.rerun()
-                            with col_b:
-                                if st.button("⏳ Fiz só uma parte", key=f"cr_parc_{topico_id}"):
-                                    salvar_status_com_aviso(conn, topico_id, "Parcial", minutos_ja + minutos_cronometrados)
-                                    set_timer_stop(topico_id)
-                                    st.rerun()
-
-                            if timer_data['status'] == 'RODANDO':
-                                time.sleep(1)
-                                st.rerun()
-                conn.close()
-                st.stop()
-
-            query_proximos = """
-                SELECT t.id as topico_id, t.nome as topico_nome, m.id as materia_id, m.nome as materia_nome, t.status, t.teoria
-                FROM topicos t
-                JOIN materias m ON t.materia_id = m.id
-                WHERE m.meta_id = ? AND t.status != 'Concluído' AND t.teoria = 0
-                ORDER BY m.id, t.id
-            """
-            df_proximos = pd.read_sql_query(query_proximos, conn, params=(int(meta_id_rotina),))
-            
-            if df_proximos.empty:
-                st.balloons()
-                st.success("🎉 Parabéns! Todos os tópicos deste objetivo foram concluídos!")
+                    st.dataframe(df_pend, use_container_width=True, hide_index=True)
             else:
-                topicos_sugeridos = df_proximos.groupby('materia_nome').first().reset_index().head(2)
-                
-                niveis = []
-                pesos = []
-                for idx, row in topicos_sugeridos.iterrows():
-                    nv = calcular_nivel_materia(row['materia_id'], conn)
-                    niveis.append(nv)
-                    pesos.append(max(1.0, 11.0 - nv))
-                
-                soma_pesos = sum(pesos)
-                
-                st.subheader("📌 Recomendações e Cronômetro de Estudo:")
-                
-                for i, (_, row) in enumerate(topicos_sugeridos.iterrows()):
-                    prop_tempo = pesos[i] / soma_pesos
-                    tempo_horas = horas_disp * prop_tempo
-                    total_segundos = int(tempo_horas * 3600)
-                    
-                    horas_f = int(tempo_horas)
-                    minutos_f = int(round((tempo_horas - horas_f) * 60))
-                    tempo_str = f"{horas_f}h{minutos_f:02d}m" if horas_f > 0 else f"{minutos_f} min"
-                    
-                    topico_id = row['topico_id']
-                    
-                    timer_data = get_timer_state(topico_id, total_segundos)
-                    status_timer = timer_data['status']
-                    seg_restantes = timer_data['restante']
+                idx_hoje = (semana_hoje - 1) * 5 + dia_hoje
+                hoje_iso = hoje_local().isoformat()
+                escalas = ler_escalas(meta_id_rotina)
+                if hoje_iso in escalas:
+                    st.warning("🚨 **Hoje está marcado como dia de escala.** Todo o cronograma foi adiado 1 dia útil: "
+                               "o que era de hoje passou para amanhã, o de amanhã para depois, e assim por diante.")
+                    if st.button("↩️ Desfazer: não estou mais escalado hoje", key="esc_desfazer"):
+                        try:
+                            n = deslocar_cronograma(conn, meta_id_rotina, idx_hoje + 1, -1)
+                            gravar_escalas(meta_id_rotina, [d for d in escalas if d != hoje_iso])
+                            fim = ultima_data_cronograma(conn, meta_id_rotina)
+                            avisar(f"Escala desfeita: {n} blocos voltaram 1 dia e os blocos de hoje estão de volta. "
+                                   f"O cronograma agora termina em {fim:%d/%m/%Y}.")
+                        except Exception as e:
+                            avisar(f"NÃO foi desfeito. Erro: {e}", "error")
+                        st.rerun()
+                else:
+                    with st.expander("🚨 Estou escalado hoje (adiar o cronograma 1 dia)"):
+                        st.write("Todo o cronograma anda 1 dia útil para frente, a partir de hoje: o que era de hoje vai "
+                                 "para amanhã, o de amanhã para depois de amanhã, e assim por diante. Nada é apagado. "
+                                 "Sexta-feira passa para a segunda seguinte. O que você já estudou em dias anteriores não muda.")
+                        confirma = st.checkbox("Confirmo que estou escalado hoje", key="esc_conf")
+                        if st.button("Adiar o cronograma 1 dia", disabled=not confirma, key="esc_btn"):
+                            try:
+                                n = deslocar_cronograma(conn, meta_id_rotina, idx_hoje, 1)
+                                gravar_escalas(meta_id_rotina, escalas + [hoje_iso])
+                                restam = conn.execute("""SELECT COUNT(*) FROM topicos t JOIN materias m ON t.materia_id = m.id
+                                    WHERE m.meta_id = ? AND (t.semana - 1) * 5 + t.dia = ?""", (int(meta_id_rotina), idx_hoje)).fetchone()[0]
+                                fim = ultima_data_cronograma(conn, meta_id_rotina)
+                                if restam == 0:
+                                    msg = (f"Cronograma adiado 1 dia e conferido: {n} blocos foram para frente. "
+                                           f"O último bloco agora é em {fim:%d/%m/%Y}.")
+                                    if meta_sel_rotina == CRONO_META_NOME and fim >= datetime.date(2027, 2, 27):
+                                        msg += " Atenção: o fim do cronograma encostou na prova (28/02/2027). Me peça para reorganizar as semanas finais."
+                                    avisar(msg)
+                                else:
+                                    avisar("O app tentou adiar, mas ainda há blocos hoje. Tente de novo.", "error")
+                            except Exception as e:
+                                avisar(f"NÃO foi adiado. Erro: {e}", "error")
+                            st.rerun()
+                st.subheader(f"📆 Semana {semana_hoje} · {DIAS_SEMANA[dia_hoje]} – blocos de hoje")
+                df_hoje = pd.read_sql_query("""
+                    SELECT t.id, t.nome, t.bloco, t.minutos_planejados, t.minutos_estudados, t.status, m.nome as materia
+                    FROM topicos t JOIN materias m ON t.materia_id = m.id
+                    WHERE m.meta_id = ? AND t.semana = ? AND t.dia = ?
+                    ORDER BY t.ordem
+                """, conn, params=(int(meta_id_rotina), int(semana_hoje), int(dia_hoje)))
+                if df_hoje.empty:
+                    st.info("Nenhum bloco previsto para hoje." if hoje_iso not in escalas else
+                            "Hoje é dia de escala: sem blocos. Bom serviço!")
+                for _, row in df_hoje.iterrows():
+                    topico_id = int(row['id'])
+                    minutos_plan = int(row['minutos_planejados'] or 0)
+                    icone = "✅" if row['status'] == "Concluído" else ("⏳" if row['status'] == "Parcial" else "📖")
+                    with st.expander(f"{icone} **{row['bloco']} · {row['materia']}** | {minutos_plan} min", expanded=row['status'] != "Concluído"):
+                        st.markdown(f"**Conteúdo:** {row['nome'].split(' · ', 1)[-1]}")
+                        orientacao = buscar_orientacao(conn, row['materia'], row['nome'])
+                        if orientacao:
+                            st.info("📌 **Orientação**\n\n" + orientacao)
+                        if st.toggle("✏️ Escrever ou editar a orientação", key=f"ori_tg_{topico_id}"):
+                            novo_txt = st.text_area("Orientação", value=orientacao, height=150,
+                                                    key=f"ori_{topico_id}", label_visibility="collapsed")
+                            if st.button("💾 Salvar orientação", key=f"ori_salvar_{topico_id}"):
+                                try:
+                                    salvar_orientacao(conn, row['materia'], row['nome'], novo_txt)
+                                    avisar("Orientação salva e conferida." if buscar_orientacao(conn, row['materia'], row['nome']) == novo_txt.strip()
+                                           else "Orientação apagada." if not novo_txt.strip() else "A orientação não foi confirmada no banco. Tente de novo.",
+                                           "success" if buscar_orientacao(conn, row['materia'], row['nome']) == novo_txt.strip() or not novo_txt.strip() else "error")
+                                except Exception as e:
+                                    avisar(f"Orientação NÃO salva. Erro: {e}", "error")
+                                st.rerun()
+                        st.write(f"**Status:** `{row['status']}` · **Minutos registrados:** {int(row['minutos_estudados'] or 0)}")
 
-                    with st.expander(f"📖 **{row['materia_nome']}** | Tempo Adaptativo: **{tempo_str}** | Domínio: `{niveis[i]}/10`", expanded=True):
-                        st.markdown(f"**Conteúdo Específico:** {row['topico_nome']}")
-                        st.write(f"**Status Atual:** `{row['status']}`")
-                        
-                        st.markdown("---")
-                        st.markdown("#### ⏱️ Cronômetro Imunizado contra Quedas")
-                        
-                        if status_timer == 'FINISHED':
-                            st.success("🔔 **Tempo de estudo concluído para esta matéria!**")
-                        
-                        hrs_c = seg_restantes // 3600
-                        mins_c = (seg_restantes % 3600) // 60
-                        secs_c = seg_restantes % 60
-                        
-                        st.markdown(f"### ⏳ `{hrs_c:02d}:{mins_c:02d}:{secs_c:02d}`")
-                        
+                        timer_data = get_timer_state(topico_id, minutos_plan * 60)
+                        seg_restantes = timer_data['restante']
+                        if timer_data['status'] == 'FINISHED':
+                            st.success("🔔 Tempo do bloco concluído!")
+                        st.markdown(f"### ⏳ `{seg_restantes // 3600:02d}:{(seg_restantes % 3600) // 60:02d}:{seg_restantes % 60:02d}`")
                         c1, c2, c3 = st.columns(3)
                         with c1:
-                            if st.button("▶️ Iniciar / Continuar", key=f"start_{topico_id}"):
+                            if st.button("▶️ Iniciar / Continuar", key=f"cr_start_{topico_id}"):
                                 set_timer_start(topico_id, seg_restantes)
                                 st.rerun()
                         with c2:
-                            if st.button("⏸️ Pausar", key=f"pause_{topico_id}"):
+                            if st.button("⏸️ Pausar", key=f"cr_pause_{topico_id}"):
                                 set_timer_pause(topico_id, seg_restantes)
                                 st.rerun()
                         with c3:
-                            if st.button("🔄 Reiniciar / Zerar", key=f"reset_{topico_id}"):
+                            if st.button("🔄 Zerar", key=f"cr_reset_{topico_id}"):
                                 set_timer_stop(topico_id)
                                 st.rerun()
 
-                        if status_timer == 'RODANDO':
-                            time.sleep(1)
-                            st.rerun()
+                        # minutos já cronometrados neste bloco
+                        minutos_cronometrados = max(0, round((minutos_plan * 60 - seg_restantes) / 60)) if timer_data['status'] != 'STOPPED' else 0
 
-                        st.markdown("---")
-                        
+                        minutos_ja = int(row['minutos_estudados'] or 0)
                         col_a, col_b = st.columns(2)
                         with col_a:
-                            if st.button(f"✅ Concluído Totalmente", key=f"conc_{topico_id}"):
-                                c = conn.cursor()
-                                c.execute("UPDATE topicos SET status = 'Concluído', teoria = 1, resumo = 1 WHERE id = ?", (int(topico_id),))
-                                conn.commit()
+                            if st.button("✅ Concluí este bloco", key=f"cr_conc_{topico_id}"):
+                                if minutos_cronometrados > 0:
+                                    minutos = minutos_ja + minutos_cronometrados
+                                else:
+                                    minutos = minutos_ja if minutos_ja > 0 else minutos_plan
+                                salvar_status_com_aviso(conn, topico_id, "Concluído", minutos)
                                 set_timer_stop(topico_id)
-                                avisar("Tópico Concluído!", "success")
                                 st.rerun()
                         with col_b:
-                            if st.button(f"⏳ Parcialmente Estudado", key=f"parc_{topico_id}"):
-                                c = conn.cursor()
-                                c.execute("UPDATE topicos SET status = 'Parcial', teoria = 1 WHERE id = ?", (int(topico_id),))
-                                conn.commit()
+                            if st.button("⏳ Fiz só uma parte", key=f"cr_parc_{topico_id}"):
+                                salvar_status_com_aviso(conn, topico_id, "Parcial", minutos_ja + minutos_cronometrados)
                                 set_timer_stop(topico_id)
-                                avisar("Marcado como Parcial.", "info")
                                 st.rerun()
+
+                        if timer_data['status'] == 'RODANDO':
+                            time.sleep(1)
+                            st.rerun()
+            conn.close()
+            st.stop()
+
+        st.info("Este objetivo ainda não tem cronograma. Gere em 🧭 Planejar Estudos ou importe em ⚙️ Gerenciador → 📅 Cronogramas.")
 
 # =============================================================================
 # MENU 2: CHECKLIST & ACOMPANHAMENTO
@@ -1330,7 +1305,7 @@ elif menu == "🗓️ Cronograma Semanal":
             if st.button("💾 Salvar a semana"):
                 for _, row in editado.iterrows():
                     salvar_status_topico(conn, row['id'], row['Status'], int(row['Estudado_min'] or 0))
-                avisar("Semana salva! O Dashboard e o Checklist já foram atualizados.", "success")
+                avisar("Semana salva! O Dashboard já foi atualizado.", "success")
                 st.rerun()
             
             st.markdown("---")
@@ -1364,85 +1339,6 @@ elif menu == "🗓️ Cronograma Semanal":
                     "",
                     *linhas_ped])
                 st.code(pedido_or, language=None)
-
-elif menu == "📋 Checklist & Acompanhamento":
-    st.header("📋 Checklist de Conteúdos por Matéria")
-    
-    df_metas = pd.read_sql_query("SELECT id, nome FROM metas WHERE ativa = 1", conn)
-    
-    if df_metas.empty:
-        st.info("Nenhum objetivo cadastrado.")
-    else:
-        col_m1, col_m2 = st.columns(2)
-        with col_m1:
-            meta_sel = st.selectbox("1. Selecione o Objetivo", df_metas['nome'].tolist())
-            meta_id = df_metas[df_metas['nome'] == meta_sel]['id'].values[0]
-        
-        df_mat = pd.read_sql_query("SELECT id, nome FROM materias WHERE meta_id = ?", conn, params=(int(meta_id),))
-        
-        if df_mat.empty:
-            st.warning("Nenhuma matéria cadastrada para este objetivo.")
-        else:
-            with col_m2:
-                mat_sel = st.selectbox("2. Filtrar por Matéria", df_mat['nome'].tolist())
-                mat_id = df_mat[df_mat['nome'] == mat_sel]['id'].values[0]
-            
-            nivel_atual = calcular_nivel_materia(mat_id, conn)
-            st.info(f"📊 **Nível de Domínio Calculado em {mat_sel}:** `{nivel_atual} / 10.0`")
-            
-            query = """
-                SELECT id, nome as Topico, teoria as Videoaula_PDF, resumo as Resumo_Mapa, status as Status
-                FROM topicos
-                WHERE materia_id = ?
-            """
-            df_topicos = pd.read_sql_query(query, conn, params=(int(mat_id),))
-            
-            if df_topicos.empty:
-                st.info("Nenhum tópico cadastrado nesta matéria.")
-            else:
-                df_topicos['Videoaula_PDF'] = df_topicos['Videoaula_PDF'].astype(bool)
-                df_topicos['Resumo_Mapa'] = df_topicos['Resumo_Mapa'].astype(bool)
-                
-                edited_df = st.data_editor(
-                    df_topicos[['id', 'Topico', 'Videoaula_PDF', 'Resumo_Mapa', 'Status']],
-                    column_config={
-                        "Videoaula_PDF": st.column_config.CheckboxColumn("Teoria"),
-                        "Resumo_Mapa": st.column_config.CheckboxColumn("Resumo/Mapa"),
-                        "Status": st.column_config.SelectboxColumn(
-                            "Status de Conclusão",
-                            options=["Pendente", "Parcial", "Concluído"],
-                            required=True
-                        )
-                    },
-                    disabled=["id", "Topico"],
-                    hide_index=True,
-                    use_container_width=True
-                )
-                
-                if st.button("💾 Salvar Alterações na Matéria"):
-                    c = conn.cursor()
-                    for idx, row in edited_df.iterrows():
-                        is_teoria = 1 if row['Videoaula_PDF'] else 0
-                        is_resumo = 1 if row['Resumo_Mapa'] else 0
-                        status_str = row['Status']
-                        
-                        if is_teoria == 1 and status_str == 'Pendente':
-                            status_str = 'Concluído'
-                        elif status_str == 'Concluído':
-                            is_teoria = 1
-                            if is_resumo == 0:
-                                is_resumo = 1
-                        elif status_str == 'Parcial':
-                            is_teoria = 1
-
-                        c.execute("""
-                            UPDATE topicos 
-                            SET teoria = ?, resumo = ?, status = ? 
-                            WHERE id = ?
-                        """, (is_teoria, is_resumo, status_str, int(row['id'])))
-                    conn.commit()
-                    avisar("Progresso salvo e sincronizado com o Dashboard de Evolução!", "success")
-                    st.rerun()
 
 # =============================================================================
 # MENU 3: REGISTRAR QUESTÕES
@@ -1489,7 +1385,7 @@ elif menu == "🎯 Simulado do que já estudei":
         estudados = assuntos_estudados(conn, meta_sim_id, incluir_parc)
         if not estudados:
             st.warning("Nenhum assunto marcado como estudado ainda. Marque os blocos como 'Concluído' "
-                       "em '📅 Meta & Rotina do Dia', '🗓️ Cronograma Semanal' ou '📋 Checklist'.")
+                       "em '📅 Meta & Rotina do Dia' ou '🗓️ Cronograma Semanal'.")
         else:
             todas = materias_edital or list(estudados)
             escolhidas = st.multiselect("Matérias que entram no simulado:", list(estudados), default=list(estudados))
@@ -1715,15 +1611,7 @@ elif menu == "📊 Dashboard de Evolução":
 elif menu == "⚙️ Gerenciador":
     st.header("⚙️ Gerenciador do Sistema")
     
-    t7, t0, t1, t2, t3, t6, t5 = st.tabs([
-        "🩺 Verificar dados",
-        "⚙️ Disp. de Tempo",
-        "1. Objetivos",
-        "2. Matérias",
-        "3. Tópicos",
-        "📅 Cronogramas",
-        "🗑️ Excluir / Limpar Dados"
-    ])
+    t7, t6 = st.tabs(["🩺 Verificar dados", "📅 Cronogramas"])
 
     with t7:
         st.subheader("🩺 O que está salvo no app")
@@ -1892,125 +1780,36 @@ elif menu == "⚙️ Gerenciador":
                     avisar("Backup restaurado!", "success")
                     st.rerun()
 
-    with t0:
-        st.subheader("Configurar Disponibilidade Diária de Estudos")
-        hor_atual = float(get_config("horas_estudo_dia", "3.0"))
-        tur_atual = get_config("turno_estudo", "Noite")
-        
-        with st.form("form_disp"):
-            novas_horas = st.number_input("Horas disponíveis por dia:", min_value=0.5, max_value=12.0, value=hor_atual, step=0.5)
-            novo_turno = st.selectbox("Turno Principal:", ["Manhã", "Tarde", "Noite"], index=["Manhã", "Tarde", "Noite"].index(tur_atual))
-            
-            if st.form_submit_button("Salvar Horários"):
-                set_config("horas_estudo_dia", novas_horas)
-                set_config("turno_estudo", novo_turno)
-                avisar("Configurações salvas!", "success")
-                st.rerun()
 
-    with t1:
-        st.subheader("Cadastrar Novo Objetivo")
-        with st.form("f_meta"):
-            n_meta = st.text_input("Nome do Objetivo (Ex: Concurso PMPE, Faculdade UPE)")
-            tipo_meta = st.selectbox("Tipo", ["Concurso", "Faculdade", "Outro"])
-            if st.form_submit_button("Adicionar Objetivo"):
-                if n_meta.strip() != "":
+
+        st.markdown("---")
+        with st.expander("🗑️ Excluir dados (use com cuidado)"):
+            st.warning("Isto apaga de verdade. Baixe o backup acima antes.")
+            df_metas_del = pd.read_sql_query("SELECT id, nome FROM metas", conn)
+            if df_metas_del.empty:
+                st.info("Nenhum dado cadastrado no momento.")
+            else:
+                sel_meta_del = st.selectbox("Objetivo:", df_metas_del['nome'].tolist(), key="del_meta")
+                m_id_del = int(df_metas_del[df_metas_del['nome'] == sel_meta_del]['id'].values[0])
+                df_mats_del = pd.read_sql_query("SELECT id, nome FROM materias WHERE meta_id = ?", conn, params=(m_id_del,))
+                opcoes_del = ["O objetivo inteiro (matérias, blocos e questões)"] + [f"Só a matéria: {nm}" for nm in df_mats_del['nome']]
+                o_que = st.selectbox("O que apagar:", opcoes_del, key="del_oque")
+                conf_del = st.checkbox(f"Confirmo que quero apagar: {o_que} de \"{sel_meta_del}\"", key="del_conf")
+                if st.button("❌ Apagar", disabled=not conf_del, key="del_btn"):
                     try:
-                        c = conn.cursor()
-                        c.execute("INSERT INTO metas (nome, tipo) VALUES (?, ?)", (n_meta.strip(), tipo_meta))
-                        conn.commit()
-                        avisar(f"Objetivo '{n_meta}' adicionado!", "success")
-                        st.rerun()
-                    except:
-                        st.error("Esse objetivo já existe.")
-
-    with t2:
-        df_m = pd.read_sql_query("SELECT id, nome FROM metas", conn)
-        if df_m.empty:
-            st.warning("Cadastre um objetivo primeiro.")
-        else:
-            st.subheader("Cadastrar Nova Matéria")
-            sel_m_mat = st.selectbox("Vincular ao Objetivo:", df_m['nome'].tolist(), key="sb_m_mat")
-            m_id_sel = df_m[df_m['nome'] == sel_m_mat]['id'].values[0]
-            
-            with st.form("f_mat"):
-                n_materia = st.text_input("Nome da Matéria (Ex: Direito Administrativo)")
-                if st.form_submit_button("Adicionar Matéria"):
-                    if n_materia.strip() != "":
-                        m_corrigida = normalizar_nome_materia(n_materia)
-                        c = conn.cursor()
-                        c.execute("INSERT INTO materias (meta_id, nome) VALUES (?, ?)", (int(m_id_sel), m_corrigida))
-                        conn.commit()
-                        avisar(f"Matéria '{m_corrigida}' adicionada!", "success")
-                        st.rerun()
-
-    with t3:
-        df_mat_all = pd.read_sql_query("""
-            SELECT m.id as mat_id, m.nome as mat_nome, meta.nome as meta_nome 
-            FROM materias m 
-            JOIN metas meta ON m.meta_id = meta.id
-        """, conn)
-        
-        if df_mat_all.empty:
-            st.warning("Cadastre matérias primeiro.")
-        else:
-            st.subheader("Cadastrar Tópico Individual")
-            options_mat = [f"{r['meta_nome']} -> {r['mat_nome']}" for i, r in df_mat_all.iterrows()]
-            sel_mat_top = st.selectbox("Selecione a Matéria:", options_mat)
-            idx_mat_sel = options_mat.index(sel_mat_top)
-            target_mat_id = df_mat_all.iloc[idx_mat_sel]['mat_id']
-            
-            with st.form("f_topico"):
-                n_topico = st.text_input("Descrição do Tópico")
-                if st.form_submit_button("Adicionar Tópico"):
-                    if n_topico.strip() != "":
-                        c = conn.cursor()
-                        c.execute("INSERT INTO topicos (materia_id, nome) VALUES (?, ?)", 
-                                  (int(target_mat_id), n_topico.strip()))
-                        conn.commit()
-                        avisar("Tópico adicionado com sucesso!", "success")
-                        st.rerun()
-
-    with t5:
-        st.subheader("🗑️ Gerenciar e Excluir Dados Importados")
-        st.write("Use esta opção caso tenha importado um arquivo errado ou queira refazer a carga de dados.")
-        
-        df_metas_del = pd.read_sql_query("SELECT id, nome FROM metas", conn)
-        
-        if df_metas_del.empty:
-            st.info("Nenhum dado cadastrado no momento.")
-        else:
-            col_del1, col_del2 = st.columns(2)
-            
-            with col_del1:
-                st.markdown("#### 1. Excluir uma Matéria Específica")
-                sel_meta_d1 = st.selectbox("Selecione o Objetivo:", df_metas_del['nome'].tolist(), key="del_meta_1")
-                m_id_d1 = df_metas_del[df_metas_del['nome'] == sel_meta_d1]['id'].values[0]
-                
-                df_mats_d1 = pd.read_sql_query("SELECT id, nome FROM materias WHERE meta_id = ?", conn, params=(int(m_id_d1),))
-                
-                if df_mats_d1.empty:
-                    st.caption("Nenhuma matéria vinculada a este objetivo.")
-                else:
-                    sel_mat_del = st.selectbox("Selecione a Matéria para apagar:", df_mats_d1['nome'].tolist())
-                    mat_id_del = df_mats_d1[df_mats_d1['nome'] == sel_mat_del]['id'].values[0]
-                    
-                    if st.button("❌ Apagar Esta Matéria e Seus Tópicos"):
-                        c = conn.cursor()
-                        c.execute("DELETE FROM materias WHERE id = ?", (int(mat_id_del),))
-                        conn.commit()
-                        avisar(f"Matéria '{sel_mat_del}' excluída com sucesso!", "success")
-                        st.rerun()
-
-            with col_del2:
-                st.markdown("#### 2. Apagar TODAS as Matérias de um Objetivo")
-                sel_meta_d2 = st.selectbox("Selecione o Objetivo:", df_metas_del['nome'].tolist(), key="del_meta_2")
-                m_id_d2 = df_metas_del[df_metas_del['nome'] == sel_meta_d2]['id'].values[0]
-                
-                if st.button("🚨 LIMPAR TODOS OS DADOS IMPORTADOS DESTE OBJETIVO", type="primary"):
-                    c = conn.cursor()
-                    c.execute("DELETE FROM materias WHERE meta_id = ?", (int(m_id_d2),))
-                    conn.commit()
-                    avisar(f"Todas as matérias e tópicos de '{sel_meta_d2}' foram apagados. Você pode importar novamente.", "success")
+                        if o_que == opcoes_del[0]:
+                            conn.execute("DELETE FROM metas WHERE id = ?", (m_id_del,))
+                            conn.commit()
+                            sobrou = conn.execute("SELECT COUNT(*) FROM metas WHERE id = ?", (m_id_del,)).fetchone()[0]
+                        else:
+                            nome_m = o_que.split(": ", 1)[1]
+                            conn.execute("DELETE FROM materias WHERE meta_id = ? AND nome = ?", (m_id_del, nome_m))
+                            conn.commit()
+                            sobrou = conn.execute("SELECT COUNT(*) FROM materias WHERE meta_id = ? AND nome = ?", (m_id_del, nome_m)).fetchone()[0]
+                        avisar(f"Apagado e conferido: {o_que}." if sobrou == 0 else "NÃO foi apagado. Tente de novo.",
+                               "success" if sobrou == 0 else "error")
+                    except Exception as e:
+                        avisar(f"NÃO foi apagado. Erro: {e}", "error")
                     st.rerun()
 
 conn.close()

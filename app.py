@@ -18,6 +18,71 @@ def hoje_local():
     """Data de hoje no horário do Recife (o servidor do Streamlit usa outro fuso)."""
     return datetime.datetime.now(ZoneInfo("America/Recife")).date()
 
+# -----------------------------------------------------------------------------
+# NOVO: GUARDA PERMANENTE NA NUVEM (Supabase)
+# O Streamlit Cloud apaga os arquivos quando o app dorme ou reinicia. Por isso o
+# banco é baixado da nuvem ao abrir e enviado de volta a cada gravação.
+# -----------------------------------------------------------------------------
+import base64 as _b64, zlib as _zlib
+import requests as _req
+
+def _nuvem_cfg():
+    try:
+        sec = st.secrets["nuvem"]
+        url, chave, token = sec.get("url"), sec.get("chave_publica"), sec.get("token")
+        if url and chave and token:
+            return str(url).rstrip("/"), str(chave), str(token)
+    except Exception:
+        pass
+    return None
+
+def _nuvem_rpc(nome, payload):
+    url, chave, _ = _nuvem_cfg()
+    r = _req.post(f"{url}/rest/v1/rpc/{nome}", json=payload, timeout=25,
+                  headers={"apikey": chave, "Authorization": f"Bearer {chave}", "Content-Type": "application/json"})
+    if r.status_code >= 400:
+        raise RuntimeError(f"{r.status_code}: {r.text[:200]}")
+    return r.json()
+
+@st.cache_resource
+def nuvem_estado():
+    """Roda UMA vez quando o app liga: traz da nuvem a versão mais recente do banco."""
+    est = {"ativa": False, "status": "desligada", "ultima": None, "erro": ""}
+    cfg = _nuvem_cfg()
+    if not cfg:
+        return est
+    est["ativa"] = True
+    try:
+        r = _nuvem_rpc("ler_banco", {"p_token": cfg[2]})
+        if r and r.get("dados"):
+            conteudo = _zlib.decompress(_b64.b64decode(r["dados"]))
+            with open(DB_PATH, "wb") as f:
+                f.write(conteudo)
+            est.update(status="ok", ultima=r.get("criado_em"))
+        else:
+            est.update(status="vazia")  # primeira vez: o banco local será enviado
+    except Exception as e:
+        # Sem conseguir ler a nuvem, NÃO enviamos nada (para não sobrescrever seus dados com um banco vazio)
+        est.update(status="erro", erro=str(e))
+    return est
+
+def nuvem_enviar():
+    """Envia o banco inteiro para a nuvem. Devolve (ok, mensagem)."""
+    est = nuvem_estado()
+    if not est["ativa"]:
+        return False, "nuvem desligada"
+    if est["status"] == "erro":
+        return False, "envio bloqueado: o app não conseguiu ler a nuvem ao abrir"
+    try:
+        with open(DB_PATH, "rb") as f:
+            dados = _b64.b64encode(_zlib.compress(f.read(), 9)).decode()
+        r = _nuvem_rpc("salvar_banco", {"p_token": _nuvem_cfg()[2], "p_dados": dados})
+        est.update(status="ok", ultima=(r or {}).get("criado_em"))
+        return True, "ok"
+    except Exception as e:
+        return False, str(e)
+
+
 def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA foreign_keys = ON;")
@@ -153,6 +218,7 @@ def init_db():
     conn.commit()
     conn.close()
 
+nuvem_estado()
 init_db()
 
 def normalizar_nome_materia(nome):
@@ -857,7 +923,15 @@ st.title("🛡️ Sistema Unificado de Gestão de Estudos")
 # NOVO: AVISOS DE CONFIRMAÇÃO (não somem quando a tela recarrega)
 # -----------------------------------------------------------------------------
 def avisar(msg, tipo="success"):
-    """Guarda um aviso para mostrar depois do recarregamento da tela."""
+    """Guarda um aviso para mostrar depois do recarregamento da tela.
+    Se foi uma gravação bem-sucedida, envia também a cópia para a nuvem e confirma."""
+    if tipo in ("success", "info") and nuvem_estado()["ativa"]:
+        ok, det = nuvem_enviar()
+        msg += " ☁️ Cópia guardada na nuvem." if ok else ""
+        if not ok:
+            st.session_state.setdefault("_avisos", []).append(
+                ("error", f"Salvo no app, mas NÃO na nuvem ({det}). Se o app reiniciar, isto pode se perder. "
+                          "Tente salvar de novo e, se repetir, me avise."))
     st.session_state.setdefault("_avisos", []).append((tipo, msg))
 
 def mostrar_avisos():
@@ -933,6 +1007,20 @@ menu = st.sidebar.radio("Navegação", [
     "⚙️ Gerenciador"
 ])
 mostrar_avisos()
+_ne = nuvem_estado()
+if _ne["status"] == "erro":
+    st.error("☁️ O app NÃO conseguiu ler seus dados da nuvem ao abrir. Para não perder nada, ele NÃO vai gravar "
+             f"na nuvem agora. Toque em \"Tentar de novo\" em 1 minuto; se continuar, me avise. Detalhe: {_ne['erro'][:150]}")
+    if st.button("🔄 Tentar ler a nuvem de novo"):
+        nuvem_estado.clear()
+        _ne2 = nuvem_estado()
+        avisar({"ok": "Nuvem lida com sucesso: seus dados foram carregados.",
+                "vazia": "Nuvem conectada (ainda sem cópias guardadas)."}.get(_ne2["status"], "") if _ne2["status"] in ("ok", "vazia")
+               else "Ainda não foi possível ler a nuvem.", "info" if _ne2["status"] in ("ok", "vazia") else "error")
+        st.rerun()
+elif not _ne["ativa"]:
+    st.warning("☁️ A guarda na nuvem ainda não está configurada: seus dados podem sumir quando o app reiniciar. "
+               "Baixe o backup em ⚙️ Gerenciador → 📅 Cronogramas.")
 
 
 def ajuste_estatuto_14_10(conn):
@@ -989,6 +1077,8 @@ def preencher_sessoes_antigas(conn):
 
 conn = get_db()
 preencher_sessoes_antigas(conn)
+if nuvem_estado()['status'] == 'vazia':
+    nuvem_enviar()
 ajuste_estatuto_14_10(conn)
 
 # =============================================================================
@@ -1866,6 +1956,19 @@ elif menu == "⚙️ Gerenciador":
     with t7:
         st.subheader("🩺 O que está salvo no app")
         st.caption("Tudo abaixo é lido agora do banco de dados. Se um número aqui não bater com o que você registrou, me avise.")
+        _nv = nuvem_estado()
+        if _nv["ativa"] and _nv["status"] == "ok":
+            try:
+                _q = pd.to_datetime(_nv["ultima"]).tz_convert("America/Recife").strftime("%d/%m/%Y %H:%M")
+            except Exception:
+                _q = str(_nv["ultima"])
+            st.success(f"☁️ Guarda na nuvem: **ativa**. Última cópia: **{_q}**.")
+        elif _nv["ativa"] and _nv["status"] == "vazia":
+            st.info("☁️ Guarda na nuvem ativa, aguardando a primeira cópia.")
+        elif _nv["ativa"]:
+            st.error(f"☁️ Guarda na nuvem com problema: {_nv['erro'][:200]}")
+        else:
+            st.warning("☁️ Guarda na nuvem: desligada.")
         criado = get_config("banco_criado_em", "")
         if criado:
             st.write(f"**Banco de dados ativo desde:** {criado}")
@@ -1899,8 +2002,8 @@ elif menu == "⚙️ Gerenciador":
             st.info("Nenhum bloco marcado como concluído ou parcial ainda.")
         else:
             st.dataframe(df_bl, hide_index=True, use_container_width=True)
-        st.warning("⚠️ O Streamlit Cloud pode apagar o banco quando o app é reiniciado. Se os números acima zerarem, "
-                   "restaure o último backup na aba 📅 Cronogramas. Baixe um backup depois de cada dia de estudo.")
+        st.caption("Com a nuvem ativa, cada gravação é guardada fora do Streamlit (as 30 últimas versões ficam "
+                   "guardadas). O backup em 📅 Cronogramas continua disponível como segurança extra.")
 
     with t6:
         st.subheader("📅 Carregar o Cronograma CFO CBMPE 2027")

@@ -172,6 +172,18 @@ def init_db():
                     origem TEXT DEFAULT 'app',
                     FOREIGN KEY(topico_id) REFERENCES topicos(id) ON DELETE CASCADE
                 )''')
+    # NOVO: notas das redações (critérios do edital CBMPE 002/2026, cargo de Oficial)
+    c.execute('''CREATE TABLE IF NOT EXISTS redacoes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    data TEXT,
+                    tema TEXT,
+                    linhas INTEGER,
+                    a1 REAL, a2 REAL, a3 REAL, a4 REAL,
+                    total REAL,
+                    zerada INTEGER DEFAULT 0,
+                    motivo_zero TEXT,
+                    comentario TEXT
+                )''')
     c.execute('''CREATE TABLE IF NOT EXISTS cronometro_estado (
                     topico_id INTEGER PRIMARY KEY,
                     status TEXT,
@@ -1003,6 +1015,7 @@ menu = st.sidebar.radio("Navegação", [
     "🗓️ Cronograma Semanal",
     "🎯 Simulado do que já estudei",
     "📝 Registrar Questões", 
+    "✍️ Redações",
     "📊 Dashboard de Evolução", 
     "⚙️ Gerenciador"
 ])
@@ -1629,6 +1642,162 @@ elif menu == "📝 Registrar Questões":
                             except Exception as e:
                                 avisar(f"NÃO foi apagado. Erro: {e}", "error")
                             st.rerun()
+
+# =============================================================================
+# MENU: REDAÇÕES (notas pelos critérios do edital CBMPE 002/2026 – cargo de Oficial)
+# =============================================================================
+elif menu == "✍️ Redações":
+    import altair as alt
+    st.header("✍️ Minhas Redações")
+
+    # Tabela 12.2 do edital (2º Tenente): pontuação máxima por aspecto
+    ASPECTOS = [
+        ("a1", "1. Tema, informatividade e argumentação", 8.0),
+        ("a2", "2. Coesão e coerência", 8.0),
+        ("a3", "3. Estrutura dissertativo-argumentativa", 7.0),
+        ("a4", "4. Gramática (pontuação, grafia/legibilidade, concordância, regência, colocação)", 7.0),
+    ]
+    NOTA_MAX, NOTA_MIN = 30.0, 9.0          # item 12.3, b
+    LINHAS_MIN, LINHAS_MAX = 15, 20          # item 12.6
+    MOTIVOS_ZERO = ["Fuga ao tema", "Tipologia diferente de dissertação", "Desestruturação acentuada",
+                    "Letra ilegível / espaçamento excessivo", "Identificação no texto", "Outro motivo do item 12.8"]
+    AZUL, CINZA, VERMELHO = "#256abf", "#9aa0a6", "#d03b3b"
+
+    with st.expander("📌 Regras do edital (item 12) – toque para ver", expanded=False):
+        st.markdown(
+            "- **Total: 30 pontos.** Abaixo de **9** = eliminado.\n"
+            "- Aspectos: tema/argumentação **8** · coesão/coerência **8** · estrutura **7** · gramática **7**.\n"
+            "- **15 a 20 linhas.** O que passar de 20 é desconsiderado; fora dos limites perde pontos.\n"
+            "- **Nota zero:** fuga ao tema, tipologia errada, desestruturação acentuada, letra ilegível, "
+            "lápis ou tinta que não seja azul/preta, identificação de qualquer tipo.")
+
+    # ---------------- registrar ----------------
+    st.subheader("➕ Registrar uma redação corrigida")
+    with st.form("form_redacao", clear_on_submit=True):
+        c1, c2 = st.columns([1, 3])
+        with c1:
+            data_red = st.date_input("Data", value=hoje_local(), format="DD/MM/YYYY")
+        with c2:
+            tema = st.text_input("Tema da redação")
+        linhas = st.number_input("Linhas usadas na folha", min_value=0, max_value=40, value=20, step=1)
+        zerada = st.checkbox("A redação levou nota ZERO (item 12.8)")
+        motivo = st.selectbox("Motivo da nota zero (só se marcou acima)", MOTIVOS_ZERO)
+        st.markdown("**Notas por aspecto**")
+        notas = {}
+        cols = st.columns(2)
+        for i, (chave, nome, maximo) in enumerate(ASPECTOS):
+            with cols[i % 2]:
+                notas[chave] = st.number_input(f"{nome} (máx. {maximo:g})", min_value=0.0, max_value=maximo,
+                                               value=0.0, step=0.25, key=f"red_{chave}")
+        comentario = st.text_area("Comentário da correção (cole aqui o que eu te devolver)", height=120)
+
+        if st.form_submit_button("💾 Salvar redação"):
+            if not tema.strip():
+                avisar("Nada foi salvo: escreva o tema da redação.", "warning")
+            else:
+                if zerada:
+                    notas = {k: 0.0 for k in notas}
+                total = round(sum(notas.values()), 2)
+                try:
+                    c = conn.cursor()
+                    c.execute("""INSERT INTO redacoes (data, tema, linhas, a1, a2, a3, a4, total, zerada, motivo_zero, comentario)
+                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                              (data_red.isoformat(), tema.strip(), int(linhas), notas["a1"], notas["a2"], notas["a3"],
+                               notas["a4"], total, 1 if zerada else 0, motivo if zerada else None, comentario.strip()))
+                    conn.commit()
+                    conf = conn.execute("SELECT total FROM redacoes WHERE id = ?", (c.lastrowid,)).fetchone()
+                    if conf is not None and abs(conf[0] - total) < 0.001:
+                        situacao = "ELIMINADO (abaixo de 9)" if total < NOTA_MIN else "acima do mínimo"
+                        avisar(f"Salvo e conferido: \"{tema.strip()[:60]}\" com {total:g}/30 ({situacao}).")
+                    else:
+                        avisar("O app tentou salvar, mas não encontrou o registro ao conferir. Tente de novo.", "error")
+                except Exception as e:
+                    avisar(f"NÃO foi salvo. Erro: {e}", "error")
+            st.rerun()
+
+    # ---------------- evolução ----------------
+    df_red = pd.read_sql_query("SELECT * FROM redacoes ORDER BY data, id", conn)
+    if df_red.empty:
+        st.info("Nenhuma redação registrada ainda. Depois que eu corrigir a primeira, lance as notas aqui.")
+    else:
+        df_red["data_dt"] = pd.to_datetime(df_red["data"])
+        df_red["n"] = range(1, len(df_red) + 1)
+        ultima = df_red.iloc[-1]
+        ult3 = df_red.tail(3)
+
+        st.subheader("📈 Como estou?")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Redações", len(df_red))
+        anterior = df_red.iloc[-2]["total"] if len(df_red) > 1 else None
+        m2.metric("Última nota", f"{ultima['total']:g}/30",
+                  None if anterior is None else f"{ultima['total'] - anterior:+g} vs. anterior")
+        m3.metric("Média das 3 últimas", f"{ult3['total'].mean():.1f}/30")
+        m4.metric("Melhor nota", f"{df_red['total'].max():g}/30")
+
+        if ultima["total"] < NOTA_MIN:
+            st.error(f"🔴 A última redação ficou abaixo de {NOTA_MIN:g}: na prova, isso elimina.")
+        if not (LINHAS_MIN <= int(ultima["linhas"]) <= LINHAS_MAX):
+            st.warning(f"⚠️ A última redação teve {int(ultima['linhas'])} linhas. O edital exige de 15 a 20.")
+
+        # aspecto mais fraco nas 3 últimas (em % do máximo de cada um, para comparar de forma justa)
+        pct = {nome: 100 * ult3[ch].mean() / mx for ch, nome, mx in ASPECTOS}
+        mais_fraco = min(pct, key=pct.get)
+        janela = "na última redação" if len(ult3) == 1 else f"média das {len(ult3)} últimas"
+        st.info(f"🎯 Ponto a atacar agora ({janela}): **{mais_fraco}**, "
+                f"com {pct[mais_fraco]:.0f}% do máximo.")
+
+        base = alt.Chart(df_red).encode(
+            x=alt.X("n:O", title="redação nº", axis=alt.Axis(labelAngle=0)))
+        linha = base.mark_line(color=AZUL, strokeWidth=2,
+                               point=alt.OverlayMarkDef(size=70, filled=True, color=AZUL)).encode(
+            y=alt.Y("total:Q", title="nota (0 a 30)", scale=alt.Scale(domain=[0, 30])),
+            tooltip=[alt.Tooltip("n:O", title="nº"), alt.Tooltip("data_dt:T", title="data", format="%d/%m/%Y"),
+                     alt.Tooltip("tema:N", title="tema"), alt.Tooltip("total:Q", title="nota")])
+        corte = alt.Chart(pd.DataFrame({"y": [NOTA_MIN]})).mark_rule(color=VERMELHO, strokeDash=[4, 3]).encode(y="y:Q")
+        st.altair_chart((linha + corte).properties(height=220), use_container_width=True)
+        st.caption("Linha azul = nota total de cada redação. Tracejado vermelho = 9 pontos (abaixo disso, eliminado).")
+
+        longo = []
+        for ch, nome, mx in ASPECTOS:
+            for r in df_red.itertuples():
+                longo.append({"n": r.n, "aspecto": nome.split(" (")[0], "pct": round(100 * getattr(r, ch) / mx)})
+        df_l = pd.DataFrame(longo)
+        asp = alt.Chart(df_l).mark_line(point=True).encode(
+            x=alt.X("n:O", title="redação nº", axis=alt.Axis(labelAngle=0)),
+            y=alt.Y("pct:Q", title="% do máximo do aspecto", scale=alt.Scale(domain=[0, 100])),
+            color=alt.Color("aspecto:N", legend=alt.Legend(orient="bottom", columns=1, title=None)),
+            tooltip=["n:O", "aspecto:N", alt.Tooltip("pct:Q", title="% do máximo")])
+        st.altair_chart(asp.properties(height=260), use_container_width=True)
+        st.caption("Cada aspecto em % do seu máximo (8, 8, 7 e 7), para comparar qual está pior.")
+
+        # ---------------- histórico ----------------
+        st.subheader("📚 Histórico")
+        tab = df_red.sort_values("id", ascending=False)
+        mostrar = pd.DataFrame({
+            "Nº": tab["n"], "Data": tab["data_dt"].dt.strftime("%d/%m/%Y"), "Tema": tab["tema"],
+            "Linhas": tab["linhas"], "Tema/arg. (8)": tab["a1"], "Coesão (8)": tab["a2"],
+            "Estrutura (7)": tab["a3"], "Gramática (7)": tab["a4"], "Total (30)": tab["total"],
+            "Zero?": tab["motivo_zero"].fillna("")})
+        st.dataframe(mostrar, hide_index=True, use_container_width=True)
+
+        opcoes = {f"Nº {r.n} · {r.data_dt:%d/%m/%Y} · {r.tema[:50]} · {r.total:g}/30": int(r.id)
+                  for r in tab.itertuples()}
+        with st.expander("💬 Ver o comentário de correção de uma redação"):
+            esc = st.selectbox("Redação", list(opcoes.keys()), key="red_ver_sel")
+            txt = df_red.loc[df_red["id"] == opcoes[esc], "comentario"].iloc[0]
+            st.markdown(txt if txt else "_Sem comentário salvo._")
+        with st.expander("🗑️ Apagar uma redação lançada errado"):
+            esc2 = st.selectbox("Redação", list(opcoes.keys()), key="red_apagar_sel")
+            if st.button("Apagar esta redação", key="red_apagar_btn"):
+                try:
+                    conn.execute("DELETE FROM redacoes WHERE id = ?", (opcoes[esc2],))
+                    conn.commit()
+                    ainda = conn.execute("SELECT 1 FROM redacoes WHERE id = ?", (opcoes[esc2],)).fetchone()
+                    avisar("Redação apagada." if not ainda else "A redação NÃO foi apagada. Tente de novo.",
+                           "success" if not ainda else "error")
+                except Exception as e:
+                    avisar(f"NÃO foi apagada. Erro: {e}", "error")
+                st.rerun()
 
 # =============================================================================
 # MENU 4: DASHBOARD DE EVOLUÇÃO

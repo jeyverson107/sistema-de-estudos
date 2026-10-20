@@ -1391,8 +1391,16 @@ elif menu == "🧭 Planejar Estudos":
              "O app distribui as horas até a véspera da prova e monta o cronograma.")
     df_ed = pd.read_sql_query("SELECT id, nome, conteudo, ajustes FROM editais ORDER BY id DESC", conn)
     if df_ed.empty:
-        st.info("Nenhum edital salvo ainda. Peça ao Claude o arquivo do edital e envie em "
-                "'⚙️ Gerenciador' → aba '📅 Cronogramas' → '📤 Importar'.")
+        tem_cfo = conn.execute("SELECT 1 FROM metas WHERE nome = ?", (CRONO_META_NOME,)).fetchone()
+        if tem_cfo:
+            st.success("✅ Seu cronograma do CFO CBMPE já está montado e em andamento. Acompanhe em "
+                       "'📅 Meta & Rotina do Dia' e '🗓️ Cronograma Semanal'. Se atrasar, use o botão "
+                       "'🔁 Fiquei para trás' em '🗓️ Cronograma Semanal'.")
+            st.info("ℹ️ Esta tela serve só para montar o cronograma de um **concurso novo**. Para isso, peça ao "
+                    "Claude o arquivo do edital e envie em '⚙️ Gerenciador' → aba '📅 Cronogramas' → '📤 Importar'.")
+        else:
+            st.info("Nenhum edital salvo ainda. Peça ao Claude o arquivo do edital e envie em "
+                    "'⚙️ Gerenciador' → aba '📅 Cronogramas' → '📤 Importar'.")
     else:
         nome_ed = st.selectbox("Edital:", df_ed["nome"].tolist())
         linha_ed = df_ed[df_ed["nome"] == nome_ed].iloc[0]

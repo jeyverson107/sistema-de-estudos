@@ -47,6 +47,7 @@ def _nuvem_rpc(nome, payload):
 @st.cache_resource
 def nuvem_estado():
     """Roda UMA vez quando o app liga: traz da nuvem a versão mais recente do banco."""
+    _versao_leitura = "2026-10-20"  # muda a cada atualização importante: força reler a nuvem
     est = {"ativa": False, "status": "desligada", "ultima": None, "erro": ""}
     cfg = _nuvem_cfg()
     if not cfg:
@@ -1009,6 +1010,135 @@ def ultima_data_cronograma(conn, meta_id):
                         WHERE m.meta_id = ? AND t.semana IS NOT NULL""", (int(meta_id),)).fetchone()[0]
     return None if r is None else inicio + datetime.timedelta(weeks=r // 5, days=r % 5)
 
+# -----------------------------------------------------------------------------
+# NOVO: FIQUEI PARA TRÁS – recomeçar o cronograma a partir de hoje
+# O que já foi concluído fica onde está. Tudo o que está pendente (inclusive o que
+# ficou para trás) é reorganizado, em ordem, a partir de hoje, SEM passar da data final.
+# Para caber: (1) sobras de dias atrasados são juntadas num mesmo dia quando cabem em 4 h;
+# (2) se ainda faltar espaço, saem os dias de REVISÃO GERAL mais antigos da reta final
+# (nunca conteúdo novo, nunca simulado, nunca a última semana).
+# -----------------------------------------------------------------------------
+MINUTOS_DIA = 240
+
+def _idx_de_data(inicio, data):
+    """Índice do dia útil no cronograma: (semana-1)*5 + dia. Fim de semana vai para a segunda seguinte."""
+    while data.weekday() > 4:
+        data += datetime.timedelta(days=1)
+    return ((data - inicio).days // 7) * 5 + data.weekday()
+
+def _bloco_de_revisao(materia, topico):
+    t = topico.lower()
+    return materia == REV or t.startswith("revisão") or "revisão geral" in t or "(semana de carnaval)" in t
+
+def planejar_recomeco(conn, meta_id, data_inicio):
+    """Calcula o recomeço sem gravar nada. Devolve um dicionário com o plano ou com 'erro'."""
+    inicio = datetime.date.fromisoformat(get_config(f"cronograma_inicio_{meta_id}", CRONO_INICIO.isoformat()))
+    hoje_idx = _idx_de_data(inicio, data_inicio)
+    linhas = conn.execute("""SELECT t.id, t.semana, t.dia, t.ordem, m.nome, t.nome, t.status,
+                                    COALESCE(t.minutos_planejados, 0), COALESCE(t.minutos_estudados, 0)
+                             FROM topicos t JOIN materias m ON t.materia_id = m.id
+                             WHERE m.meta_id = ? AND t.semana IS NOT NULL""", (int(meta_id),)).fetchall()
+    concluidos = {topico_sem_prefixo(r[5]) for r in linhas if r[6] == "Concluído"}
+    vagas = sorted({(r[1] - 1) * 5 + r[2] for r in linhas if (r[1] - 1) * 5 + r[2] >= hoje_idx})
+    dias = {}
+    for r in linhas:
+        if r[6] == "Concluído":
+            continue
+        tid, sem, dia, ordem, materia, nome, status, prev, feito = r
+        topico = topico_sem_prefixo(nome)
+        dias.setdefault((sem - 1) * 5 + dia, []).append({
+            "id": tid, "ordem": ordem, "materia": materia, "topico": topico,
+            "resta": max(prev - feito, 0) if status == "Parcial" else prev,
+            # bloco dispensável num dia atrasado: caderno de erros/revisão curtos, ou lei seca já feita em outro bloco
+            "dispensavel": (materia == REV and prev <= 30) or (topico.startswith("Lei seca:") and topico in concluidos)})
+    unidades = []  # cada unidade = lista de blocos que vão para um mesmo dia
+    for idx in sorted(dias):
+        blocos = sorted(dias[idx], key=lambda b: b["ordem"])
+        unidades.append({"idx": idx, "blocos": blocos, "atrasado": idx < hoje_idx})
+    # (1) junta sobras de dias atrasados vizinhos quando cabem num dia
+    descartados, juntadas = [], 0
+    i = 0
+    while i < len(unidades) - 1:
+        a, b = unidades[i], unidades[i + 1]
+        if a["atrasado"] and b["atrasado"]:
+            total = sum(x["resta"] for x in a["blocos"] + b["blocos"])
+            essenciais = [x for x in a["blocos"] + b["blocos"] if not x["dispensavel"]]
+            if total <= MINUTOS_DIA:
+                a["blocos"] += b["blocos"]
+            elif sum(x["resta"] for x in essenciais) <= MINUTOS_DIA:
+                descartados += [x for x in a["blocos"] + b["blocos"] if x["dispensavel"]]
+                a["blocos"] = essenciais
+            else:
+                i += 1
+                continue
+            del unidades[i + 1]
+            juntadas += 1
+        else:
+            i += 1
+    # (2) corta revisões gerais mais antigas da reta final, se ainda faltar espaço
+    excesso = len(unidades) - len(vagas)
+    ultima_semana = set(vagas[-5:])
+    cortados_dias = []
+    if excesso > 0:
+        for u in list(unidades):
+            if excesso == 0:
+                break
+            so_revisao = all(_bloco_de_revisao(x["materia"], x["topico"]) and x["materia"] != SIM for x in u["blocos"])
+            if not u["atrasado"] and so_revisao and u["idx"] not in ultima_semana:
+                unidades.remove(u)
+                cortados_dias.append(u)
+                excesso -= 1
+    if excesso > 0:
+        return {"erro": f"Mesmo cortando revisões, faltam {excesso} dia(s) até o fim do cronograma."}
+    mover = []
+    for u, vaga in zip(unidades, vagas):
+        for ordem, x in enumerate(u["blocos"], start=1):
+            mover.append((x["id"], vaga // 5 + 1, vaga % 5, ordem, x["topico"]))
+    return {"inicio": inicio, "mover": mover, "descartados": descartados, "cortados_dias": cortados_dias,
+            "juntadas": juntadas, "vagas": len(vagas),
+            "atrasados": sum(1 for u in unidades if u["atrasado"]) + juntadas}
+
+def aplicar_recomeco(conn, meta_id, data_inicio):
+    plano = planejar_recomeco(conn, meta_id, data_inicio)
+    if "erro" in plano:
+        return plano
+    inicio = plano["inicio"]
+    for tid, sem, dia, ordem, topico in plano["mover"]:
+        conn.execute("UPDATE topicos SET semana = ?, dia = ?, ordem = ?, nome = ? WHERE id = ?",
+                     (sem, dia, ordem, nome_topico_crono(sem, dia, topico, inicio), tid))
+    apagar = [x["id"] for x in plano["descartados"]] + [x["id"] for u in plano["cortados_dias"] for x in u["blocos"]]
+    for tid in apagar:  # só blocos pendentes, sem questões nem minutos registrados
+        tem_registro = conn.execute("SELECT 1 FROM exercicios WHERE topico_id = ? UNION SELECT 1 FROM sessoes WHERE topico_id = ?",
+                                    (tid, tid)).fetchone()
+        if not tem_registro:
+            conn.execute("DELETE FROM topicos WHERE id = ? AND status = 'Pendente' AND COALESCE(minutos_estudados, 0) = 0", (tid,))
+    conn.commit()
+    resumo = []
+    for u in plano["cortados_dias"]:
+        d = inicio + datetime.timedelta(weeks=u["idx"] // 5, days=u["idx"] % 5)
+        resumo.append(f"{d:%d/%m}: " + " + ".join(f'{x["materia"]} ({x["topico"]})' for x in u["blocos"]))
+    plano["resumo_cortes"] = resumo
+    return plano
+
+def recomeco_automatico_20_10(conn):
+    """Pedido em 20/10/2026: recomeçar o cronograma CFO a partir de 20/10. Roda uma vez só."""
+    chave = "recomeco_2026_10_20"
+    est = nuvem_estado()
+    if get_config(chave, "") or (est["ativa"] and est["status"] != "ok"):
+        return  # sem ler a nuvem, não mexe (para não trabalhar sobre dados velhos)
+    meta = conn.execute("SELECT id FROM metas WHERE nome = ?", (CRONO_META_NOME,)).fetchone()
+    if not meta:
+        return
+    data = max(hoje_local(), datetime.date(2026, 10, 20))
+    plano = aplicar_recomeco(conn, meta[0], data)
+    if "erro" in plano:
+        set_config(chave, "erro: " + plano["erro"])
+        return
+    set_config(chave, f"feito em {data:%d/%m/%Y}")
+    avisar(f"🔁 Cronograma recomeçado a partir de {data:%d/%m}: o que estava pendente foi reorganizado até 26/02. "
+           f"Dias de revisão geral retirados para caber: {'; '.join(plano['resumo_cortes']) or 'nenhum'}.", "info")
+
+
 menu = st.sidebar.radio("Navegação", [
     "📅 Meta & Rotina do Dia",
     "🧭 Planejar Estudos",
@@ -1093,6 +1223,7 @@ preencher_sessoes_antigas(conn)
 if nuvem_estado()['status'] == 'vazia':
     nuvem_enviar()
 ajuste_estatuto_14_10(conn)
+recomeco_automatico_20_10(conn)
 
 # =============================================================================
 # MENU 1: META & ROTINA DO DIA
@@ -1389,6 +1520,27 @@ elif menu == "🗓️ Cronograma Semanal":
         n_semanas_cr = max(total_semanas(meta_id_cr, conn), 1)
         semana_padrao = min(max(semana_hoje, 1), n_semanas_cr)
         inicio_cr = datetime.date.fromisoformat(get_config(f"cronograma_inicio_{meta_id_cr}", CRONO_INICIO.isoformat()))
+
+        with st.expander("🔁 Fiquei para trás: recomeçar o cronograma a partir de hoje"):
+            st.write("O que você já concluiu fica onde está. Tudo o que está pendente (inclusive o atrasado) é "
+                     "reorganizado em ordem a partir de hoje, **sem passar da data final**. Para caber, sobras de dias "
+                     "atrasados são juntadas (até 4 h por dia) e, se ainda faltar espaço, saem os dias de **revisão geral** "
+                     "mais antigos da reta final. Conteúdo novo, simulados e a última semana nunca são cortados.")
+            plano_prev = planejar_recomeco(conn, meta_id_cr, hoje_local())
+            if "erro" in plano_prev:
+                st.error(plano_prev["erro"])
+            else:
+                st.caption(f"Prévia: {plano_prev['juntadas']} junção(ões) de dias atrasados · "
+                           f"{len(plano_prev['cortados_dias'])} dia(s) de revisão geral retirados.")
+                if st.checkbox("Confirmo que quero recomeçar a partir de hoje", key="recomeco_conf"):
+                    if st.button("🔁 Recomeçar agora", key="recomeco_btn"):
+                        try:
+                            r = aplicar_recomeco(conn, meta_id_cr, hoje_local())
+                            avisar("Cronograma recomeçado a partir de hoje. Retirados para caber: "
+                                   + ("; ".join(r.get("resumo_cortes", [])) or "nada") + ".")
+                        except Exception as e:
+                            avisar(f"NÃO foi recomeçado. Erro: {e}", "error")
+                        st.rerun()
 
         def rotulo_semana(s):
             ini = inicio_cr + datetime.timedelta(weeks=s - 1)

@@ -1,5 +1,5 @@
 # Despertador da nuvem: o Supabase gratuito pausa o banco quando fica dias sem uso.
-# Este robô do GitHub faz uma consulta simples todo dia para mantê-lo acordado.
+# Este robô do GitHub chama todo dia a função ping() do banco (só responde 1) para mantê-lo acordado.
 # A chave abaixo é a chave PÚBLICA (publishable) do Supabase: ela não dá acesso a nenhum
 # dado, porque as tabelas são protegidas (RLS ligado e sem permissões públicas).
 name: Manter nuvem acordada
@@ -15,9 +15,10 @@ jobs:
     steps:
       - name: Consulta simples no Supabase
         run: |
-          codigo=$(curl -sS -m 30 -o /dev/null -w "%{http_code}" \
-            "https://dridetefcogedekdsyzh.supabase.co/rest/v1/app_banco?select=id&limit=1" \
-            -H "apikey: sb_publishable_SRyntUxRratCwkNwdHaHnQ_71OW8jLx")
+          codigo=$(curl -sS -m 30 -o /dev/null -w "%{http_code}" -X POST \
+            "https://dridetefcogedekdsyzh.supabase.co/rest/v1/rpc/ping" \
+            -H "apikey: sb_publishable_SRyntUxRratCwkNwdHaHnQ_71OW8jLx" \
+            -H "Content-Type: application/json" -d '{}')
           echo "Resposta do Supabase: $codigo"
           if [ "$codigo" != "200" ]; then
             echo "::error::A nuvem não respondeu (código $codigo). Ela pode estar pausada: reative em supabase.com."

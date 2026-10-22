@@ -402,21 +402,21 @@ _DPM = [("Aplicação da lei penal militar",), ("Crime militar: art. 9º do CPM 
         ("Crimes contra a autoridade e a disciplina",), ("Crimes contra o serviço e o dever militar", "Demais crimes contra o serviço militar"),
         ("Crimes contra a administração militar",), ("Crimes contra a pessoa e o patrimônio", "Crimes em tempo de guerra (visão geral)"),
         ("Súmulas do STF, STJ e STM",), ("Questões AOCP", "Questões AOCP e revisão")]
-_ROT = [("Est: conceitos e apresentação de dados", "Mat: razão, proporção, porcentagem", "Quím: fogo e combustão"),
-        ("Est: média, moda, mediana", "Fís: cinemática e MUV", "Bio: citologia e metabolismo"),
-        ("Est: variância, desvio, CV, boxplot", "Info: segurança da informação", "Quím: átomo e tabela periódica"),
-        ("Mat: juros, PA e PG", "Fís: dinâmica e Leis de Newton", "Bio: ecologia"),
-        ("Est: probabilidade", "Inglês/Espanhol: interpretação e tempos verbais", "Quím: ligações e funções inorgânicas"),
+_ROT = [("Est: conceitos e apresentação de dados", "Mat: conjuntos numéricos, razão, proporção e porcentagem", "Quím: fogo e combustão"),
+        ("Est: média, moda, mediana", "Fís: grandezas, vetores e cinemática (MU e MUV)", "Bio: citologia e metabolismo"),
+        ("Est: variância, desvio, CV, boxplot", "Info: segurança da informação", "Quím: misturas, átomo e tabela periódica"),
+        ("Mat: juros, PA e PG", "Fís: dinâmica (Leis de Newton), quantidade de movimento e equilíbrio", "Bio: ecologia"),
+        ("Est: probabilidade", "Inglês/Espanhol: Espanhol: interpretação de textos e determinantes", "Quím: ligações e funções inorgânicas"),
         ("Mat: geometria plana e espacial", "Fís: hidrostática e empuxo", "Bio: saúde, doenças e primeiros socorros"),
-        ("Est: variáveis aleatórias e distribuições", "Info: Windows 11, arquivos e backup", "Quím: soluções e estequiometria"),
-        ("Mat: funções", "Fís: trabalho, energia e potência", "Bio: genética e biotecnologia"),
-        ("Est: testes t, F e ANOVA (interpretação)", "Inglês/Espanhol: modais e condicionais", "Quím: produtos perigosos e oxirredução"),
-        ("Mat: contagem e probabilidade", "Fís: termologia e gases", "Bio: fisiologia humana"),
-        ("Est: regressão linear", "Info: Excel e Calc", "Quím: termoquímica, equilíbrio, pH e tampão"),
-        ("Fís: eletrodinâmica (Lei de Ohm)", "Inglês/Espanhol: orações relativas e voz passiva", "Bio: biomas e problemas ambientais"),
-        ("Est: questões AOCP", "Info: internet, nuvem, Word e Writer", "Quím: radioatividade e orgânica básica"),
-        ("Mat: trigonometria e geometria analítica", "Fís: óptica e ondas", "Bio: questões AOCP"),
-        ("Est: revisão e questões", "Inglês/Espanhol: questões", "Quím: questões AOCP"),
+        ("Est: variáveis aleatórias e distribuições", "Info: Windows 11, hardware e backup", "Quím: gases, soluções, estequiometria e água"),
+        ("Mat: funções (inclusive exponencial e logarítmica), equações e inequações", "Fís: trabalho, energia, potência e gravitação", "Bio: genética e biotecnologia"),
+        ("Est: testes t, F e ANOVA (interpretação)", "Inglês/Espanhol: Espanhol: substantivos, adjetivos e pronomes", "Quím: produtos perigosos, oxirredução e siderurgia"),
+        ("Mat: contagem e probabilidade", "Fís: termologia e gases", "Bio: evolução, classificação, embriologia e fisiologia humana"),
+        ("Est: regressão linear", "Info: Excel e Calc", "Quím: termoquímica, cinética, equilíbrio e pH"),
+        ("Fís: eletrostática, eletrodinâmica e magnetismo", "Inglês/Espanhol: Espanhol: verbos, advérbios, preposições e conjunções", "Bio: biomas e problemas ambientais"),
+        ("Est: questões AOCP", "Info: internet, nuvem e editores (Word/Writer e PowerPoint/Impress)", "Quím: radioatividade, orgânica e química aplicada"),
+        ("Mat: trigonometria, geometria analítica e sistemas", "Fís: óptica e ondas", "Bio: questões AOCP"),
+        ("Est: revisão e questões", "Inglês/Espanhol: Espanhol: acentuação, heterossemânticos e questões", "Quím: questões AOCP"),
         ("Mat: questões mistas de Matemática e Física", "Info: questões", "Quím: questões mistas de Química e Biologia")]
 _PORT = ["Interpretação, tipologia e gêneros textuais", "Classes de palavras I", "Classes de palavras II", "Funções do QUE e do SE",
          "Termos da oração", "Coordenação e subordinação", "Pontuação", "Concordância", "Regência e crase", "Colocação pronominal",
@@ -1123,6 +1123,89 @@ def aplicar_recomeco(conn, meta_id, data_inicio):
     plano["resumo_cortes"] = resumo
     return plano
 
+# -----------------------------------------------------------------------------
+# NOVO (22/10/2026): títulos dos blocos mostram tudo o que cobrem + Língua Estrangeira = Espanhol
+# -----------------------------------------------------------------------------
+RENOMEAR_TOPICOS_2026_10_22 = [
+ ("Física",
+  "cinemática e MUV",
+  "grandezas, vetores e cinemática (MU e MUV)"),
+ ("Física",
+  "dinâmica e Leis de Newton",
+  "dinâmica (Leis de Newton), quantidade de movimento e equilíbrio"),
+ ("Física",
+  "trabalho, energia e potência",
+  "trabalho, energia, potência e gravitação"),
+ ("Física",
+  "eletrodinâmica (Lei de Ohm)",
+  "eletrostática, eletrodinâmica e magnetismo"),
+ ("Química",
+  "átomo e tabela periódica",
+  "misturas, átomo e tabela periódica"),
+ ("Química",
+  "soluções e estequiometria",
+  "gases, soluções, estequiometria e água"),
+ ("Química",
+  "produtos perigosos e oxirredução",
+  "produtos perigosos, oxirredução e siderurgia"),
+ ("Química",
+  "termoquímica, equilíbrio, pH e tampão",
+  "termoquímica, cinética, equilíbrio e pH"),
+ ("Química",
+  "radioatividade e orgânica básica",
+  "radioatividade, orgânica e química aplicada"),
+ ("Matemática",
+  "razão, proporção, porcentagem",
+  "conjuntos numéricos, razão, proporção e porcentagem"),
+ ("Matemática",
+  "funções",
+  "funções (inclusive exponencial e logarítmica), equações e inequações"),
+ ("Matemática",
+  "trigonometria e geometria analítica",
+  "trigonometria, geometria analítica e sistemas"),
+ ("Biologia",
+  "fisiologia humana",
+  "evolução, classificação, embriologia e fisiologia humana"),
+ ("Informática",
+  "Windows 11, arquivos e backup",
+  "Windows 11, hardware e backup"),
+ ("Informática",
+  "internet, nuvem, Word e Writer",
+  "internet, nuvem e editores (Word/Writer e PowerPoint/Impress)"),
+ ("Língua Estrangeira",
+  "interpretação e tempos verbais",
+  "Espanhol: interpretação de textos e determinantes"),
+ ("Língua Estrangeira",
+  "modais e condicionais",
+  "Espanhol: substantivos, adjetivos e pronomes"),
+ ("Língua Estrangeira",
+  "orações relativas e voz passiva",
+  "Espanhol: verbos, advérbios, preposições e conjunções"),
+ ("Língua Estrangeira",
+  "questões",
+  "Espanhol: acentuação, heterossemânticos e questões")
+]
+
+def ajuste_titulos_2026_10_22(conn):
+    chave = "ajuste_titulos_2026_10_22"
+    est = nuvem_estado()
+    if get_config(chave, "") or (est["ativa"] and est["status"] != "ok"):
+        return
+    n = 0
+    for materia, antigo, novo in RENOMEAR_TOPICOS_2026_10_22:
+        linhas = conn.execute("""SELECT t.id, t.nome FROM topicos t JOIN materias m ON t.materia_id = m.id
+                                 WHERE m.nome = ?""", (materia,)).fetchall()
+        for tid, nome in linhas:
+            if topico_sem_prefixo(nome) == antigo:
+                prefixo = nome[: len(nome) - len(antigo)] if nome.endswith(antigo) else ""
+                conn.execute("UPDATE topicos SET nome = ? WHERE id = ?", (prefixo + novo, tid))
+                n += 1
+        conn.execute("DELETE FROM orientacoes WHERE materia = ? AND topico = ? AND origem = 'padrao'", (materia, antigo))
+    conn.commit()
+    set_config(chave, f"feito ({n} blocos)")
+    if n:
+        avisar(f"Cronograma atualizado: {n} blocos de exatas, Informática e Espanhol ganharam títulos mais completos.", "info")
+
 def recomeco_automatico_20_10(conn):
     """Pedido em 20/10/2026: recomeçar o cronograma CFO a partir de 20/10. Roda uma vez só."""
     chave = "recomeco_2026_10_20"
@@ -1142,6 +1225,127 @@ def recomeco_automatico_20_10(conn):
            f"Dias de revisão geral retirados para caber: {'; '.join(plano['resumo_cortes']) or 'nenhum'}.", "info")
 
 
+# -----------------------------------------------------------------------------
+# NOVO: ANÁLISE DE DESEMPENHO E AJUSTE (prova de Oficial do CBMPE, Tabela 10.2 do edital)
+# Cada questão vale 1 ponto. Eliminado quem: tirar < 30% em algum bloco, zerar alguma
+# matéria ou tirar < 30% no total (item 10.1.4).
+# -----------------------------------------------------------------------------
+QUESTOES_PROVA_CFO = {
+    "Língua Portuguesa": 5, "Língua Estrangeira": 5, "Informática": 5, "Estatística": 5,
+    "Matemática": 5, "Física": 5, "Química": 5, "Biologia": 5,
+    "Direito Constitucional": 8, "Direito Administrativo": 7, "Legislação dos Militares de PE": 10, "Direito Penal Militar": 5,
+}
+BLOCOS_PROVA_CFO = {
+    "Bloco I": ["Língua Portuguesa", "Língua Estrangeira", "Informática", "Estatística"],
+    "Bloco II": ["Matemática", "Física", "Química", "Biologia"],
+    "Bloco III": ["Direito Constitucional", "Direito Administrativo", "Legislação dos Militares de PE", "Direito Penal Militar"],
+}
+MIN_QUESTOES_CONFIAVEL = 20   # abaixo disso o app não manda aumentar nem reduzir
+PESO_NEUTRO = 10              # suavização: cada matéria "começa" com 10 questões imaginárias a 50%
+
+def analise_desempenho(conn, meta_id, hoje=None):
+    """Tabela por matéria: questões, acerto, estimativa, pontos projetados, progresso e situação."""
+    hoje = hoje or hoje_local()
+    inicio = datetime.date.fromisoformat(get_config(f"cronograma_inicio_{meta_id}", CRONO_INICIO.isoformat()))
+    hoje_idx = _idx_de_data(inicio, hoje)
+    ex = pd.read_sql_query("""SELECT m.nome AS materia, e.data, e.acertos, e.erros FROM exercicios e
+                              JOIN topicos t ON e.topico_id = t.id JOIN materias m ON t.materia_id = m.id
+                              WHERE m.meta_id = ?""", conn, params=(int(meta_id),))
+    bl = pd.read_sql_query("""SELECT m.nome AS materia, t.semana, t.dia, t.status, t.minutos_planejados AS prev
+                              FROM topicos t JOIN materias m ON t.materia_id = m.id
+                              WHERE m.meta_id = ? AND t.semana IS NOT NULL""", conn, params=(int(meta_id),))
+    bl["idx"] = (bl["semana"] - 1) * 5 + bl["dia"]
+    corte14 = (hoje - datetime.timedelta(days=14)).isoformat()
+    linhas = []
+    for materia, q in QUESTOES_PROVA_CFO.items():
+        e = ex[ex["materia"] == materia]
+        a, n = int(e["acertos"].sum()), int(e["acertos"].sum() + e["erros"].sum())
+        e14 = e[e["data"] >= corte14]
+        a14, n14 = int(e14["acertos"].sum()), int(e14["acertos"].sum() + e14["erros"].sum())
+        # com 20+ questões vale o acerto real; com menos, suaviza em direção a 50% (pouco dado engana)
+        est = (a / n) if n >= MIN_QUESTOES_CONFIAVEL else (a + 0.5 * PESO_NEUTRO) / (n + PESO_NEUTRO)
+        b = bl[bl["materia"] == materia]
+        concl = int((b["status"] == "Concluído").sum())
+        previstos = int((b["idx"] < hoje_idx).sum())
+        if n == 0 and concl == 0:
+            situacao = "⏳ ainda não começou"
+        elif n < MIN_QUESTOES_CONFIAVEL:
+            situacao = "⚪ pouco dado"
+        elif est >= 0.80:
+            situacao = "🟢 forte: pode aliviar"
+        elif est >= 0.60:
+            situacao = "🟡 bom: manter"
+        else:
+            situacao = "🔴 fraco: reforçar"
+        linhas.append({"materia": materia, "questoes_prova": q, "feitas": n, "acertos": a,
+                       "pct": (a / n) if n else None, "pct_14d": (a14 / n14) if n14 >= 10 else None,
+                       "estimativa": est, "pontos": q * est, "ganho": q * (1 - est),
+                       "blocos_concluidos": concl, "blocos_total": len(b), "blocos_previstos": previstos,
+                       "situacao": situacao})
+    return pd.DataFrame(linhas)
+
+def ritmo_cronograma(conn, meta_id, hoje=None):
+    """Blocos que já deveriam estar feitos (antes de hoje) e ainda estão pendentes, e blocos adiantados."""
+    hoje = hoje or hoje_local()
+    inicio = datetime.date.fromisoformat(get_config(f"cronograma_inicio_{meta_id}", CRONO_INICIO.isoformat()))
+    hoje_idx = _idx_de_data(inicio, hoje)
+    r = conn.execute("""SELECT
+            SUM(CASE WHEN (t.semana-1)*5+t.dia < ? AND t.status != 'Concluído' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN (t.semana-1)*5+t.dia < ? AND t.status != 'Concluído'
+                     THEN MAX(t.minutos_planejados - COALESCE(t.minutos_estudados,0), 0) ELSE 0 END),
+            SUM(CASE WHEN (t.semana-1)*5+t.dia > ? AND t.status = 'Concluído' THEN 1 ELSE 0 END)
+            FROM topicos t JOIN materias m ON t.materia_id = m.id WHERE m.meta_id = ? AND t.semana IS NOT NULL""",
+        (hoje_idx, hoje_idx, hoje_idx, int(meta_id))).fetchone()
+    return {"atrasados": int(r[0] or 0), "minutos_atrasados": int(r[1] or 0), "adiantados": int(r[2] or 0)}
+
+def foco_sugerido(conn, meta_id):
+    """Matéria em que um bloco de revisão rende mais pontos agora (só com dados suficientes)."""
+    try:
+        df = analise_desempenho(conn, meta_id)
+    except Exception:
+        return None
+    ok = df[(df["feitas"] >= 10)]
+    if ok.empty:
+        return None
+    return ok.sort_values("ganho", ascending=False).iloc[0].to_dict()
+
+def planejar_reta_final(conn, meta_id, df):
+    """Redistribui os blocos de REVISÃO pendentes da reta final (semana 17 em diante) pelas matérias
+    que mais podem render pontos. Direito com Direito, demais com demais; durações não mudam."""
+    alvo = conn.execute("""SELECT t.id, t.nome, m.nome, t.minutos_planejados FROM topicos t JOIN materias m ON t.materia_id = m.id
+                           WHERE m.meta_id = ? AND t.semana >= 17 AND t.status = 'Pendente'
+                             AND COALESCE(t.minutos_estudados, 0) = 0
+                           ORDER BY t.semana, t.dia, t.ordem""", (int(meta_id),)).fetchall()
+    direito = set(BLOCOS_PROVA_CFO["Bloco III"])
+    pools = {"direito": [], "demais": []}
+    for tid, nome, materia, minutos in alvo:
+        top = topico_sem_prefixo(nome)
+        if materia in QUESTOES_PROVA_CFO and top.startswith("Revisão") and not top.startswith("Revisão leve"):
+            pools["direito" if materia in direito else "demais"].append((tid, nome, materia, minutos))
+    ganho = dict(zip(df["materia"], df["ganho"]))
+    plano = []
+    for grupo, blocos in pools.items():
+        materias = [m for m in QUESTOES_PROVA_CFO if (m in direito) == (grupo == "direito")]
+        usados = {m: 0 for m in materias}
+        for tid, nome, materia_antiga, minutos in blocos:
+            escolhida = max(materias, key=lambda m: ganho.get(m, 0) / (1 + usados[m]))
+            usados[escolhida] += 1
+            plano.append((tid, nome, materia_antiga, escolhida))
+    return plano
+
+def aplicar_reta_final(conn, meta_id, plano):
+    ids = {nome: mid for mid, nome in conn.execute("SELECT id, nome FROM materias WHERE meta_id = ?", (int(meta_id),))}
+    n = 0
+    for tid, nome, antiga, nova in plano:
+        if nova in ids:
+            prefixo = nome.split(" · ", 1)[0]
+            conn.execute("UPDATE topicos SET materia_id = ?, nome = ? WHERE id = ?",
+                         (ids[nova], f"{prefixo} · Revisão dirigida pelo desempenho + questões AOCP", tid))
+            n += 1
+    conn.commit()
+    return n
+
+
 menu = st.sidebar.radio("Navegação", [
     "📅 Meta & Rotina do Dia",
     "🧭 Planejar Estudos",
@@ -1150,6 +1354,7 @@ menu = st.sidebar.radio("Navegação", [
     "📝 Registrar Questões", 
     "✍️ Redações",
     "📊 Dashboard de Evolução", 
+    "🧠 Análise e ajuste",
     "⚙️ Gerenciador"
 ])
 mostrar_avisos()
@@ -1227,6 +1432,7 @@ if nuvem_estado()['status'] == 'vazia':
     nuvem_enviar()
 ajuste_estatuto_14_10(conn)
 recomeco_automatico_20_10(conn)
+ajuste_titulos_2026_10_22(conn)
 
 # =============================================================================
 # MENU 1: META & ROTINA DO DIA
@@ -1323,6 +1529,12 @@ if menu == "📅 Meta & Rotina do Dia":
                         orientacao = buscar_orientacao(conn, row['materia'], row['nome'])
                         if orientacao:
                             st.info("📌 **Orientação**\n\n" + orientacao)
+                        if row['materia'] == REV and row['status'] != "Concluído":
+                            _foco = foco_sugerido(conn, meta_id_rotina)
+                            if _foco:
+                                st.success(f"🧠 **Foco sugerido pelo seu desempenho:** {_foco['materia']} "
+                                           f"({_foco['pct']:.0%} de acerto em {int(_foco['feitas'])} questões). "
+                                           "Use este bloco para o caderno de erros e questões dessa matéria.")
                         if st.toggle("✏️ Escrever ou editar a orientação", key=f"ori_tg_{topico_id}"):
                             novo_txt = st.text_area("Orientação", value=orientacao, height=150,
                                                     key=f"ori_{topico_id}", label_visibility="collapsed")
@@ -2287,6 +2499,133 @@ elif menu == "📊 Dashboard de Evolução":
                 ok_h = float(get_config("meta_horas_semana", "0")) == float(nh)
                 avisar(f"Metas salvas: {nh:.0f} h e {nq} questões por semana." if ok_h else "As metas NÃO foram salvas. Tente de novo.",
                        "success" if ok_h else "error")
+                st.rerun()
+
+# =============================================================================
+# MENU: ANÁLISE E AJUSTE
+# =============================================================================
+elif menu == "🧠 Análise e ajuste":
+    import altair as alt
+    st.header("🧠 Análise e ajuste")
+    meta_an = conn.execute("SELECT id FROM metas WHERE nome = ?", (CRONO_META_NOME,)).fetchone()
+    if not meta_an:
+        st.info("Esta análise usa a tabela da prova do CFO CBMPE (pesos de cada matéria). Carregue o cronograma do CFO para usá-la.")
+    else:
+        meta_an = int(meta_an[0])
+        df = analise_desempenho(conn, meta_an)
+        ritmo = ritmo_cronograma(conn, meta_an)
+        total_feitas = int(df["feitas"].sum())
+
+        st.caption("Como funciona: o app cruza as questões que você registra (acertos e erros) com o peso de cada matéria "
+                   "na prova (Tabela 10.2 do edital: toda questão vale 1 ponto). Com poucas questões, a estatística engana; "
+                   f"por isso o app só diz \"reforçar\" ou \"aliviar\" a partir de {MIN_QUESTOES_CONFIAVEL} questões numa matéria.")
+
+        # ---------------- 1. ritmo ----------------
+        st.subheader("⏱️ Ritmo do cronograma")
+        if ritmo["atrasados"] == 0:
+            st.success("✅ Em dia: nenhum bloco atrasado." + (f" Você está {ritmo['adiantados']} bloco(s) adiantado." if ritmo["adiantados"] else ""))
+        else:
+            dias = ritmo["minutos_atrasados"] / MINUTOS_DIA
+            (st.warning if dias < 3 else st.error)(
+                f"{ritmo['atrasados']} bloco(s) atrasado(s), cerca de {ritmo['minutos_atrasados'] / 60:.1f} h "
+                f"(≈ {dias:.1f} dia(s) de estudo). "
+                + ("Dá para recuperar com um sábado ou estendendo alguns dias." if dias < 3 else
+                   "Use o botão '🔁 Fiquei para trás' em 🗓️ Cronograma Semanal para reorganizar a partir de hoje."))
+
+        # ---------------- 2. nota projetada ----------------
+        st.subheader("🎯 Nota projetada na prova objetiva")
+        com_dados = int((df["feitas"] >= 10).sum())
+        nota = df["pontos"].sum()
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Nota projetada", f"{nota:.0f} / 70")
+        c2.metric("Questões registradas", total_feitas)
+        c3.metric("Matérias com dados", f"{com_dados} / 12")
+        if com_dados < 12:
+            st.caption("Matérias com menos de 10 questões registradas entram na conta perto de 50% (neutro). "
+                       "A projeção fica mais confiável à medida que você registra questões.")
+        for bloco, materias in BLOCOS_PROVA_CFO.items():
+            sub = df[df["materia"].isin(materias)]
+            q = int(sub["questoes_prova"].sum())
+            pts = sub["pontos"].sum()
+            pct = pts / q
+            dados = int((sub["feitas"] >= 10).sum())
+            texto = f"**{bloco}** ({', '.join(materias)}): {pts:.1f} de {q} ({pct:.0%})"
+            if dados == 0:
+                st.write(f"⚪ {texto} · sem dados ainda")
+            elif pct < 0.30:
+                st.error(f"🔴 {texto}: abaixo de 30%, isso ELIMINA (item 10.1.4 do edital).")
+            elif pct < 0.45:
+                st.warning(f"🟡 {texto}: perto do corte de 30%. Atenção.")
+            else:
+                st.write(f"🟢 {texto}")
+        zerar = df[(df["feitas"] >= 10) & (df["pct"] < 0.2)]
+        for _, r in zerar.iterrows():
+            st.error(f"⚠️ {r['materia']}: {r['pct']:.0%} de acerto. Zerar uma matéria elimina (item 10.1.4, b).")
+
+        # ---------------- 3. prioridade ----------------
+        st.subheader("📌 Onde estudar mais (prioridade)")
+        st.caption("Ordem pelos pontos que você ainda pode ganhar: questões da matéria na prova × quanto você erra hoje.")
+        rank = (df.assign(_comecou=(df["feitas"] > 0) | (df["blocos_concluidos"] > 0))
+                  .sort_values(["_comecou", "ganho"], ascending=[False, False]).reset_index(drop=True))
+        tabela = pd.DataFrame({
+            "Matéria": rank["materia"],
+            "Questões na prova": rank["questoes_prova"],
+            "Questões feitas": rank["feitas"],
+            "Acerto": rank["pct"].apply(lambda v: "–" if v is None or pd.isna(v) else f"{v:.0%}"),
+            "Últimos 14 dias": rank["pct_14d"].apply(lambda v: "–" if v is None or pd.isna(v) else f"{v:.0%}"),
+            "Pontos em jogo": rank["ganho"].round(1),
+            "Blocos feitos": rank["blocos_concluidos"].astype(str) + "/" + rank["blocos_total"].astype(str),
+            "Situação": rank["situacao"]})
+        st.dataframe(tabela, hide_index=True, use_container_width=True)
+
+        graf = df[df["feitas"] > 0].assign(acerto=lambda d: (d["estimativa"] * 100).round(0))
+        graf["faixa"] = graf["acerto"].apply(lambda v: "abaixo de 60%" if v < 60 else ("60% a 79%" if v < 80 else "80% ou mais"))
+        barras = alt.Chart(graf).mark_bar(cornerRadiusEnd=3).encode(
+            y=alt.Y("materia:N", sort="-x", title=None),
+            x=alt.X("acerto:Q", title="acerto (%)", scale=alt.Scale(domain=[0, 100])),
+            color=alt.Color("faixa:N", scale=alt.Scale(domain=["abaixo de 60%", "60% a 79%", "80% ou mais"],
+                                                        range=["#d03b3b", "#fab219", "#0ca30c"]),
+                            legend=alt.Legend(orient="bottom", title=None)),
+            tooltip=["materia:N", alt.Tooltip("acerto:Q", format=".0f"), "feitas:Q"])
+        regras = alt.Chart(pd.DataFrame({"x": [30, 60, 80]})).mark_rule(strokeDash=[4, 3], color="#6b7280").encode(x="x:Q")
+        if graf.empty:
+            st.caption("O gráfico aparece quando você registrar questões em 📝 Registrar Questões.")
+        else:
+            st.altair_chart((barras + regras).properties(height=max(120, 34 * len(graf))), use_container_width=True)
+            st.caption(f"Barras: acerto de cada matéria (com menos de {MIN_QUESTOES_CONFIAVEL} questões, o valor é suavizado "
+                       "em direção a 50%). Linhas: 30% (corte do edital), 60% e 80%.")
+
+        # ---------------- 4. o que o app ajusta sozinho ----------------
+        st.subheader("🔧 Ajustes automáticos")
+        foco = foco_sugerido(conn, meta_an)
+        if foco:
+            st.info(f"🎯 Nos blocos de **Revisão / caderno de erros**, o foco sugerido agora é **{foco['materia']}** "
+                    f"({foco['pct']:.0%} de acerto em {int(foco['feitas'])} questões; {foco['ganho']:.1f} pontos em jogo). "
+                    "Essa sugestão aparece dentro do bloco em 📅 Meta & Rotina do Dia e muda sozinha conforme você registra questões.")
+        else:
+            st.info("Registre pelo menos 10 questões em alguma matéria para o app passar a sugerir o foco dos blocos de revisão.")
+
+        st.markdown("**Reta final:** redistribuir os dias de revisão geral pelas matérias que mais podem render pontos.")
+        plano = planejar_reta_final(conn, meta_an, df)
+        liberar = hoje_local() >= datetime.date(2027, 2, 1)
+        confiaveis = int((df["feitas"] >= MIN_QUESTOES_CONFIAVEL).sum())
+        if not plano:
+            st.caption("Não há blocos de revisão pendentes na reta final para redistribuir.")
+        elif not liberar or confiaveis < 6:
+            st.caption(f"Disponível a partir de 01/02/2027 e com pelo menos 6 matérias com {MIN_QUESTOES_CONFIAVEL}+ questões "
+                       f"(hoje: {confiaveis}). Antes disso, o resultado mudaria muito de uma semana para outra.")
+            with st.expander("Prévia (só para você ver; nada é alterado)"):
+                st.dataframe(pd.DataFrame([{"Bloco": n.split(" · ", 1)[0], "Hoje": a, "Ficaria": b} for _, n, a, b in plano]),
+                             hide_index=True, use_container_width=True)
+        else:
+            st.dataframe(pd.DataFrame([{"Bloco": n.split(" · ", 1)[0], "Hoje": a, "Vai para": b} for _, n, a, b in plano]),
+                         hide_index=True, use_container_width=True)
+            if st.checkbox("Confirmo a redistribuição da reta final", key="reta_conf") and st.button("🔧 Aplicar", key="reta_btn"):
+                try:
+                    n = aplicar_reta_final(conn, meta_an, plano)
+                    avisar(f"Reta final ajustada: {n} bloco(s) de revisão redistribuídos pelo seu desempenho.")
+                except Exception as e:
+                    avisar(f"NÃO foi ajustado. Erro: {e}", "error")
                 st.rerun()
 
 # =============================================================================

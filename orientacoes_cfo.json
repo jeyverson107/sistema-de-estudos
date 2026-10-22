@@ -680,7 +680,7 @@
   },
   {
    "materia": "Matemática",
-   "topico": "razão, proporção, porcentagem",
+   "topico": "conjuntos numéricos, razão, proporção e porcentagem",
    "texto": "**Conhecimentos numéricos (item 1 do edital).**\n- Conjuntos numéricos (naturais, inteiros, racionais e reais), desigualdades, divisibilidade (MMC, MDC) e fatoração.\n- Razão e proporção, grandezas direta e inversamente proporcionais, regra de três simples e composta.\n- Porcentagem: aumentos e descontos sucessivos pelo fator multiplicativo.\n- Você tem facilidade em exatas: faça 15 a 20 min de revisão e passe às questões; volte à teoria só no que errar."
   },
   {
@@ -695,7 +695,7 @@
   },
   {
    "materia": "Matemática",
-   "topico": "funções",
+   "topico": "funções (inclusive exponencial e logarítmica), equações e inequações",
    "texto": "**Conhecimentos algébricos (item 4 do edital).**\n- Gráficos e funções; 1º grau (gráfico, raiz) e 2º grau (vértice, raízes, sinal); noções de funções polinomiais e racionais.\n- Exponencial e logarítmica: propriedades e equações.\n- Equações e inequações.\n- Você tem facilidade em exatas: faça 15 a 20 min de revisão e passe às questões; volte à teoria só no que errar."
   },
   {
@@ -705,7 +705,7 @@
   },
   {
    "materia": "Matemática",
-   "topico": "trigonometria e geometria analítica",
+   "topico": "trigonometria, geometria analítica e sistemas",
    "texto": "**Trigonometria e geometria analítica (itens 2, 4 e 5 do edital).**\n- Seno, cosseno e tangente no triângulo retângulo; ciclo trigonométrico e funções trigonométricas.\n- Plano cartesiano, distância entre pontos, equação da reta (paralelismo e perpendicularidade) e da circunferência; sistemas de equações.\n- Você tem facilidade em exatas: faça 15 a 20 min de revisão e passe às questões; volte à teoria só no que errar."
   },
   {
@@ -715,12 +715,12 @@
   },
   {
    "materia": "Física",
-   "topico": "cinemática e MUV",
+   "topico": "grandezas, vetores e cinemática (MU e MUV)",
    "texto": "**Fundamentos + cinemática (itens 1 e 2 do edital).**\n- Ordem de grandeza, notação científica, Sistema Internacional; grandezas escalares × vetoriais e operações com vetores.\n- MU e MUV: equações horárias, Torricelli e gráficos (s × t, v × t); queda livre e lançamento vertical.\n- Você tem facilidade em exatas: faça 15 a 20 min de revisão e passe às questões; volte à teoria só no que errar."
   },
   {
    "materia": "Física",
-   "topico": "dinâmica e Leis de Newton",
+   "topico": "dinâmica (Leis de Newton), quantidade de movimento e equilíbrio",
    "texto": "**Dinâmica e equilíbrio (item 2 do edital).**\n- Inércia e referenciais; as três Leis de Newton; peso, normal, tração e atrito; diagramas de forças; plano inclinado.\n- Movimento circular: força centrípeta.\n- Quantidade de movimento, impulso e sua conservação; centro de massa; torque e equilíbrio de ponto material e de corpo rígido.\n- Você tem facilidade em exatas: faça 15 a 20 min de revisão e passe às questões; volte à teoria só no que errar."
   },
   {
@@ -730,7 +730,7 @@
   },
   {
    "materia": "Física",
-   "topico": "trabalho, energia e potência",
+   "topico": "trabalho, energia, potência e gravitação",
    "texto": "**Energia (item 3) + gravitação (item 4 do edital).**\n- Trabalho, energia cinética e potencial, forças conservativas × dissipativas, conservação da energia mecânica e potência.\n- Gravitação Universal, aceleração da gravidade, Leis de Kepler e marés (visão geral).\n- Você tem facilidade em exatas: faça 15 a 20 min de revisão e passe às questões; volte à teoria só no que errar."
   },
   {
@@ -740,7 +740,7 @@
   },
   {
    "materia": "Física",
-   "topico": "eletrodinâmica (Lei de Ohm)",
+   "topico": "eletrostática, eletrodinâmica e magnetismo",
    "texto": "**Fenômenos elétricos e magnéticos (item 5 do edital).**\n- Eletrostática: carga, Lei de Coulomb, campo e potencial elétrico, linhas de campo, poder das pontas, blindagem, capacitores.\n- Eletrodinâmica: corrente, resistência e resistividade, Lei de Ohm, efeito Joule, circuitos simples, potência e consumo (kWh), corrente contínua × alternada.\n- Magnetismo: ímãs, campo magnético e campo magnético terrestre.\n- Você tem facilidade em exatas: faça 15 a 20 min de revisão e passe às questões; volte à teoria só no que errar."
   },
   {
@@ -755,7 +755,7 @@
   },
   {
    "materia": "Química",
-   "topico": "átomo e tabela periódica",
+   "topico": "misturas, átomo e tabela periódica",
    "texto": "**Estrutura da matéria (itens 1.1 a 1.3 do edital).**\n- Substâncias simples e compostas, misturas, critérios de pureza e métodos de separação.\n- Estrutura atômica, isótopos, isóbaros e isótonos, número de Avogadro, distribuição eletrônica.\n- Tabela periódica: metais, não metais, semimetais e gases nobres; propriedades periódicas.\n- Divisão: 40 min de teoria + 50 min de exercícios."
   },
   {
@@ -765,22 +765,22 @@
   },
   {
    "materia": "Química",
-   "topico": "soluções e estequiometria",
+   "topico": "gases, soluções, estequiometria e água",
    "texto": "**Soluções e estequiometria (itens 1.7, 1.8 e 2.1 do edital).**\n- Estados da matéria, volume molar e gás ideal.\n- Concentração (g/L e mol/L), fração molar, diluição e mistura de soluções.\n- Classificação das reações, balanceamento, cálculos estequiométricos e rendimento.\n- Água: propriedades e tratamento para consumo (item 6).\n- Divisão: 30 min de teoria + 60 min de exercícios."
   },
   {
    "materia": "Química",
-   "topico": "produtos perigosos e oxirredução",
+   "topico": "produtos perigosos, oxirredução e siderurgia",
    "texto": "**Produtos químicos (item 5) + oxirredução (item 2.6 do edital).**\n- Substâncias inflamáveis, combustíveis, oxidantes, corrosivas, tóxicas e reativas; incompatibilidade entre substâncias; Fichas com Dados de Segurança (FDS).\n- Oxirredução: agente oxidante e redutor, balanceamento, pilha (célula galvânica), eletrólise, corrosão.\n- Siderurgia (item 4.6): ferro-gusa × aço e as reações de obtenção.\n- Divisão: 40 min de teoria + 50 min de exercícios."
   },
   {
    "materia": "Química",
-   "topico": "termoquímica, equilíbrio, pH e tampão",
+   "topico": "termoquímica, cinética, equilíbrio e pH",
    "texto": "**Transformações da matéria (itens 2.2 a 2.5 do edital).**\n- Termoquímica: entalpia, reações endotérmicas e exotérmicas, energia de ligação.\n- Cinética: energia de ativação, fatores que alteram a velocidade, catalisadores.\n- Equilíbrio químico e Le Chatelier; produto de solubilidade (Kps), efeito do íon comum, hidrólise, pH, pOH e solução-tampão.\n- Divisão: 40 min de teoria + 50 min de exercícios."
   },
   {
    "materia": "Química",
-   "topico": "radioatividade e orgânica básica",
+   "topico": "radioatividade, orgânica e química aplicada",
    "texto": "**Radioatividade (item 1.9) + orgânica e química aplicada (itens 3 e 4 do edital).**\n- Emissões alfa e beta (leis da radioatividade), meia-vida, fissão e fusão, riscos e proteção radiológica.\n- Orgânica, em visão geral: cadeias carbônicas, funções orgânicas, nomenclatura IUPAC, isomeria plana e espacial, tipos de reação.\n- Petróleo e combustíveis; polímeros (PVC, polietileno, borracha sintética).\n- Divisão: 40 min de teoria + 50 min de exercícios."
   },
   {
@@ -815,7 +815,7 @@
   },
   {
    "materia": "Biologia",
-   "topico": "fisiologia humana",
+   "topico": "evolução, classificação, embriologia e fisiologia humana",
    "texto": "**Identidade dos seres vivos (item 2 do edital).**\n- Embriologia, anatomia e fisiologia humana (circulatório, respiratório, nervoso, digestório).\n- Evolução, diversidade e classificação dos seres vivos; adaptação aos ambientes.\n- Divisão: 40 min de teoria + 50 min de exercícios."
   },
   {
@@ -835,7 +835,7 @@
   },
   {
    "materia": "Informática",
-   "topico": "Windows 11, arquivos e backup",
+   "topico": "Windows 11, hardware e backup",
    "texto": "**Windows 11, arquivos, hardware e backup (itens 4 a 6 do edital).**\n- Windows 11: arquivos e pastas, atalhos de teclado, Configurações, Painel de Controle e comandos do Prompt de Comando.\n- Organização do computador: processador, memórias, armazenamento, periféricos de entrada e saída.\n- Backup: tipos (completo, incremental e diferencial), dispositivos e restauração.\n- Divisão: 40 min de teoria + 50 min de questões."
   },
   {
@@ -845,7 +845,7 @@
   },
   {
    "materia": "Informática",
-   "topico": "internet, nuvem, Word e Writer",
+   "topico": "internet, nuvem e editores (Word/Writer e PowerPoint/Impress)",
    "texto": "**Internet e editores (itens 1, 2 e 7 do edital).**\n- Internet × intranet, navegadores, serviços de internet e computação em nuvem.\n- Word/Writer e PowerPoint/Impress: formatação, estilos, tabelas, apresentações e exportação de arquivos (por exemplo, para PDF).\n- Divisão: 40 min de teoria + 50 min de questões."
   },
   {
@@ -855,23 +855,23 @@
   },
   {
    "materia": "Língua Estrangeira",
-   "topico": "interpretação e tempos verbais",
-   "texto": "**Interpretação + tempos verbais.**\n- Leitura de textos: ideia principal, vocabulário e cognatos.\n- Inglês: os tempos que o edital lista (Present, Past e Future, nas formas Simple, Continuous, Perfect e Perfect Continuous) nas formas afirmativa, negativa e interrogativa.\n- Se escolher Espanhol: verbos regulares, irregulares e perífrases verbais.\n- Divisão: 1 h de textos e questões + 30 min de gramática."
+   "topico": "Espanhol: interpretação de textos e determinantes",
+   "texto": "**Leitura e determinantes do nome (item 1 do edital de Espanhol).**\n- Interpretação: ideia principal, informação explícita × implícita, vocabulário pelo contexto. **Cuidado com os falsos cognatos** (veja o último bloco).\n- Artigos: definidos (el, la, los, las), contrações **al** e **del**, indefinidos (un, una, unos, unas) e o neutro **lo** (lo bueno, lo mejor).\n- Possessivos (mi/mío, tu/tuyo, su/suyo…), demonstrativos (este, ese, aquel), numerais, indefinidos (algún, ningún, otro), relativos (que, quien, cual, cuyo), interrogativos e exclamativos (qué, quién, cuál, cuánto, cómo, dónde, cuándo, com acento).\n- Divisão: 40 min de teoria + 50 min de questões, priorizando interpretação."
   },
   {
    "materia": "Língua Estrangeira",
-   "topico": "modais e condicionais",
-   "texto": "**Modais e condicionais.**\n- Inglês: can, could, should, may, might, must, have to, would, need, had better.\n- Zero, first, second, third e mixed conditionals.\n- Se escolher Espanhol: pronomes, preposições e conjunções.\n- Divisão: 30 min de teoria + 60 min de textos e questões."
+   "topico": "Espanhol: substantivos, adjetivos e pronomes",
+   "texto": "**Substantivos, adjetivos e pronomes (itens 2 a 4 do edital).**\n- Substantivos e adjetivos: gênero, número e grau (plural em -s/-es; -z vira -ces; apócope: buen, mal, gran, primer).\n- **Heterogenéricos** (gênero diferente do português): el viaje, el árbol, el puente, la leche, la nariz, la sangre.\n- Pronomes pessoais sujeito (yo, tú, él, usted, nosotros, vosotros…) e complemento (me, te, lo/la, le, nos, os, los/las, les, se); a troca **le → se** (se lo di).\n- Possessivos, demonstrativos, relativos, indefinidos, interrogativos e exclamativos como pronomes.\n- Divisão: 40 min de teoria + 50 min de questões."
   },
   {
    "materia": "Língua Estrangeira",
-   "topico": "orações relativas e voz passiva",
-   "texto": "**Orações, voz passiva e padrões verbais.**\n- Inglês: relative clauses (defining × non-defining), voz passiva, adverbial clauses, verbo + to/infinitivo sem to/-ing, phrasal verbs e question tags.\n- Revise também substantivos (contável × incontável), comparativo e superlativo e pronomes.\n- Se escolher Espanhol: heterográficos, heterotônicos, heterogenéricos e heterossemânticos (falsos amigos).\n- Divisão: 30 min de teoria + 60 min de textos e questões."
+   "topico": "Espanhol: verbos, advérbios, preposições e conjunções",
+   "texto": "**Verbos e palavras de ligação (itens 5 a 8 do edital).**\n- Verbos regulares (-ar, -er, -ir) nos tempos do indicativo; irregulares de irregularidade comum (e→ie: pensar/pienso; o→ue: poder/puedo; e→i: pedir/pido) e própria (ser, ir, tener, hacer, decir).\n- Impessoais (haber: hay; llover, nevar), pronominais (llamarse, quedarse, irse) e perífrases (ir a + infinitivo, tener que, acabar de, volver a, estar + gerúndio).\n- Advérbios e locuções adverbiais (muy × mucho; ya, todavía, aún); preposições (a, en, de, desde, hasta, hacia, para × por).\n- Conjunções coordenativas (y → e antes de \"i/hi\"; o → u antes de \"o/ho\"; pero × **sino**) e subordinativas (aunque, porque, si, cuando, mientras).\n- Divisão: 40 min de teoria + 50 min de questões."
   },
   {
    "materia": "Língua Estrangeira",
-   "topico": "questões",
-   "texto": "**Revisão por questões de Língua Estrangeira.**\n- Priorize questões de interpretação de texto, que é o item 1 do edital."
+   "topico": "Espanhol: acentuação, heterossemânticos e questões",
+   "texto": "**Acentuação, divergências português × espanhol e questões (itens 9 a 11 do edital).**\n- Acentuação: agudas, llanas e esdrújulas; tilde diacrítica (él × el, tú × tu, sí × si, más × mas).\n- Sinônimos e antônimos.\n- **Divergências do item 11:** heterográficos (escrita diferente), heterotônicos (sílaba tônica diferente: teléfono, océano, nivel), heterogenéricos (gênero diferente) e **heterossemânticos/falsos amigos**: exquisito = delicioso; embarazada = grávida; oficina = escritório; polvo = poeira; pelo = cabelo; borrar = apagar; rato = momento; ratón = rato.\n- Últimos 50 min: questões de Espanhol, priorizando interpretação de texto (item 1)."
   },
   {
    "materia": "Redação",
@@ -996,7 +996,7 @@
   {
    "materia": "Informática",
    "topico": "Revisão de Informática e Língua Estrangeira",
-   "texto": "**Revisão de Informática e Língua Estrangeira.** 45 min em cada: segurança, backup e planilhas; interpretação de textos."
+   "texto": "**Revisão de Informática e Língua Estrangeira.** 45 min em cada: segurança, backup e planilhas; Espanhol (interpretação de textos e falsos amigos)."
   },
   {
    "materia": "Física",
@@ -1012,6 +1012,66 @@
    "materia": "Matemática",
    "topico": "Exatas mistas: revisão leve",
    "texto": "**Revisão leve de exatas.** Releia os resumos e faça algumas questões de cada matéria. Sem conteúdo novo."
+  },
+  {
+   "materia": "Língua Portuguesa",
+   "topico": "Revisão dirigida pelo desempenho + questões AOCP",
+   "texto": "**Revisão dirigida pelo seu desempenho.** O app escolheu esta matéria porque é onde você ainda pode ganhar mais pontos.\n- 30 min: caderno de erros desta matéria (releia a regra ou o artigo de cada erro).\n- Resto do bloco: questões da banca Instituto AOCP nos assuntos em que você mais errou.\n- Registre as questões em 📝 Registrar Questões: é isso que mantém a análise certa."
+  },
+  {
+   "materia": "Língua Estrangeira",
+   "topico": "Revisão dirigida pelo desempenho + questões AOCP",
+   "texto": "**Revisão dirigida pelo seu desempenho.** O app escolheu esta matéria porque é onde você ainda pode ganhar mais pontos.\n- 30 min: caderno de erros desta matéria (releia a regra ou o artigo de cada erro).\n- Resto do bloco: questões da banca Instituto AOCP nos assuntos em que você mais errou.\n- Registre as questões em 📝 Registrar Questões: é isso que mantém a análise certa."
+  },
+  {
+   "materia": "Informática",
+   "topico": "Revisão dirigida pelo desempenho + questões AOCP",
+   "texto": "**Revisão dirigida pelo seu desempenho.** O app escolheu esta matéria porque é onde você ainda pode ganhar mais pontos.\n- 30 min: caderno de erros desta matéria (releia a regra ou o artigo de cada erro).\n- Resto do bloco: questões da banca Instituto AOCP nos assuntos em que você mais errou.\n- Registre as questões em 📝 Registrar Questões: é isso que mantém a análise certa."
+  },
+  {
+   "materia": "Estatística",
+   "topico": "Revisão dirigida pelo desempenho + questões AOCP",
+   "texto": "**Revisão dirigida pelo seu desempenho.** O app escolheu esta matéria porque é onde você ainda pode ganhar mais pontos.\n- 30 min: caderno de erros desta matéria (releia a regra ou o artigo de cada erro).\n- Resto do bloco: questões da banca Instituto AOCP nos assuntos em que você mais errou.\n- Registre as questões em 📝 Registrar Questões: é isso que mantém a análise certa."
+  },
+  {
+   "materia": "Matemática",
+   "topico": "Revisão dirigida pelo desempenho + questões AOCP",
+   "texto": "**Revisão dirigida pelo seu desempenho.** O app escolheu esta matéria porque é onde você ainda pode ganhar mais pontos.\n- 30 min: caderno de erros desta matéria (releia a regra ou o artigo de cada erro).\n- Resto do bloco: questões da banca Instituto AOCP nos assuntos em que você mais errou.\n- Registre as questões em 📝 Registrar Questões: é isso que mantém a análise certa."
+  },
+  {
+   "materia": "Física",
+   "topico": "Revisão dirigida pelo desempenho + questões AOCP",
+   "texto": "**Revisão dirigida pelo seu desempenho.** O app escolheu esta matéria porque é onde você ainda pode ganhar mais pontos.\n- 30 min: caderno de erros desta matéria (releia a regra ou o artigo de cada erro).\n- Resto do bloco: questões da banca Instituto AOCP nos assuntos em que você mais errou.\n- Registre as questões em 📝 Registrar Questões: é isso que mantém a análise certa."
+  },
+  {
+   "materia": "Química",
+   "topico": "Revisão dirigida pelo desempenho + questões AOCP",
+   "texto": "**Revisão dirigida pelo seu desempenho.** O app escolheu esta matéria porque é onde você ainda pode ganhar mais pontos.\n- 30 min: caderno de erros desta matéria (releia a regra ou o artigo de cada erro).\n- Resto do bloco: questões da banca Instituto AOCP nos assuntos em que você mais errou.\n- Registre as questões em 📝 Registrar Questões: é isso que mantém a análise certa."
+  },
+  {
+   "materia": "Biologia",
+   "topico": "Revisão dirigida pelo desempenho + questões AOCP",
+   "texto": "**Revisão dirigida pelo seu desempenho.** O app escolheu esta matéria porque é onde você ainda pode ganhar mais pontos.\n- 30 min: caderno de erros desta matéria (releia a regra ou o artigo de cada erro).\n- Resto do bloco: questões da banca Instituto AOCP nos assuntos em que você mais errou.\n- Registre as questões em 📝 Registrar Questões: é isso que mantém a análise certa."
+  },
+  {
+   "materia": "Direito Constitucional",
+   "topico": "Revisão dirigida pelo desempenho + questões AOCP",
+   "texto": "**Revisão dirigida pelo seu desempenho.** O app escolheu esta matéria porque é onde você ainda pode ganhar mais pontos.\n- 30 min: caderno de erros desta matéria (releia a regra ou o artigo de cada erro).\n- Resto do bloco: questões da banca Instituto AOCP nos assuntos em que você mais errou.\n- Registre as questões em 📝 Registrar Questões: é isso que mantém a análise certa."
+  },
+  {
+   "materia": "Direito Administrativo",
+   "topico": "Revisão dirigida pelo desempenho + questões AOCP",
+   "texto": "**Revisão dirigida pelo seu desempenho.** O app escolheu esta matéria porque é onde você ainda pode ganhar mais pontos.\n- 30 min: caderno de erros desta matéria (releia a regra ou o artigo de cada erro).\n- Resto do bloco: questões da banca Instituto AOCP nos assuntos em que você mais errou.\n- Registre as questões em 📝 Registrar Questões: é isso que mantém a análise certa."
+  },
+  {
+   "materia": "Legislação dos Militares de PE",
+   "topico": "Revisão dirigida pelo desempenho + questões AOCP",
+   "texto": "**Revisão dirigida pelo seu desempenho.** O app escolheu esta matéria porque é onde você ainda pode ganhar mais pontos.\n- 30 min: caderno de erros desta matéria (releia a regra ou o artigo de cada erro).\n- Resto do bloco: questões da banca Instituto AOCP nos assuntos em que você mais errou.\n- Registre as questões em 📝 Registrar Questões: é isso que mantém a análise certa."
+  },
+  {
+   "materia": "Direito Penal Militar",
+   "topico": "Revisão dirigida pelo desempenho + questões AOCP",
+   "texto": "**Revisão dirigida pelo seu desempenho.** O app escolheu esta matéria porque é onde você ainda pode ganhar mais pontos.\n- 30 min: caderno de erros desta matéria (releia a regra ou o artigo de cada erro).\n- Resto do bloco: questões da banca Instituto AOCP nos assuntos em que você mais errou.\n- Registre as questões em 📝 Registrar Questões: é isso que mantém a análise certa."
   }
  ]
 }

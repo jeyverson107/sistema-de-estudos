@@ -229,6 +229,8 @@ def init_db():
     c.execute("UPDATE materias SET nome = REPLACE(nome, 'Portugês', 'Português') WHERE nome LIKE '%Portugês%'")
     c.execute("UPDATE materias SET nome = REPLACE(nome, 'PORTUGÊS', 'PORTUGUÊS') WHERE nome LIKE '%PORTUGÊS%'")
     
+    # NOVO: desliga cronômetros esquecidos em blocos já concluídos
+    c.execute("DELETE FROM cronometro_estado WHERE topico_id IN (SELECT id FROM topicos WHERE status = 'Concluído')")
     conn.commit()
     conn.close()
 
@@ -924,6 +926,8 @@ def salvar_status_topico(conn, topico_id, status, minutos=None):
         if delta != 0:  # guarda QUANDO você estudou (para o calendário e as horas por semana)
             c.execute("INSERT INTO sessoes (data, topico_id, minutos, origem) VALUES (?, ?, ?, 'app')",
                       (hoje_local().isoformat(), int(topico_id), delta))
+    if status == "Concluído":  # NOVO: bloco concluído não deixa cronômetro ligado para trás
+        c.execute("DELETE FROM cronometro_estado WHERE topico_id = ?", (int(topico_id),))
     conn.commit()
 
 # -----------------------------------------------------------------------------
@@ -1333,7 +1337,11 @@ if menu == "📅 Meta & Rotina do Dia":
                                 st.rerun()
                         st.write(f"**Status:** `{row['status']}` · **Minutos registrados:** {int(row['minutos_estudados'] or 0)}")
 
-                        timer_data = get_timer_state(topico_id, minutos_plan * 60)
+                        # NOVO: em bloco Parcial o cronômetro parte do que FALTA (previsto - já registrado)
+                        minutos_reg = int(row['minutos_estudados'] or 0)
+                        base_seg = ((minutos_plan - minutos_reg) if row['status'] == "Parcial" and 0 < minutos_reg < minutos_plan
+                                    else minutos_plan) * 60
+                        timer_data = get_timer_state(topico_id, base_seg)
                         seg_restantes = timer_data['restante']
                         def _hms(seg):
                             return f"{seg // 3600:02d}:{(seg % 3600) // 60:02d}:{seg % 60:02d}"
@@ -1361,7 +1369,7 @@ if menu == "📅 Meta & Rotina do Dia":
                                 st.rerun()
 
                         # minutos já cronometrados neste bloco (inclui o tempo extra, quando o "restante" fica negativo)
-                        minutos_cronometrados = max(0, round((minutos_plan * 60 - seg_restantes) / 60)) if timer_data['status'] != 'STOPPED' else 0
+                        minutos_cronometrados = max(0, round((base_seg - seg_restantes) / 60)) if timer_data['status'] != 'STOPPED' else 0
 
                         minutos_ja = int(row['minutos_estudados'] or 0)
                         col_a, col_b = st.columns(2)

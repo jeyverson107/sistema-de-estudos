@@ -3,6 +3,7 @@ import pandas as pd
 import datetime
 import sqlite3
 import time
+import math
 import os
 from zoneinfo import ZoneInfo
 
@@ -261,11 +262,9 @@ def get_timer_state(topico_id, duracao_padrao_segundos):
     status, fim_ts, seg_pausados = res
     
     if status == 'RODANDO':
-        restante = int(fim_ts - agora)
-        if restante <= 0:
-            set_timer_stop(topico_id)
-            return {'status': 'FINISHED', 'restante': 0}
-        return {'status': 'RODANDO', 'restante': restante}
+        # NOVO: ao chegar no zero o cronômetro NÃO para: o "restante" fica negativo,
+        # e a tela mostra isso como tempo extra (contagem positiva a partir do zero)
+        return {'status': 'RODANDO', 'restante': int(math.floor(fim_ts - agora))}
     
     elif status == 'PAUSADO':
         return {'status': 'PAUSADO', 'restante': seg_pausados}
@@ -1336,9 +1335,17 @@ if menu == "📅 Meta & Rotina do Dia":
 
                         timer_data = get_timer_state(topico_id, minutos_plan * 60)
                         seg_restantes = timer_data['restante']
-                        if timer_data['status'] == 'FINISHED':
-                            st.success("🔔 Tempo do bloco concluído!")
-                        st.markdown(f"### ⏳ `{seg_restantes // 3600:02d}:{(seg_restantes % 3600) // 60:02d}:{seg_restantes % 60:02d}`")
+                        def _hms(seg):
+                            return f"{seg // 3600:02d}:{(seg % 3600) // 60:02d}:{seg % 60:02d}"
+                        if seg_restantes >= 0:
+                            st.markdown(f"### ⏳ `{_hms(seg_restantes)}`")
+                        else:
+                            extra = -seg_restantes
+                            st.success("🔔 Tempo previsto do bloco cumprido! O cronômetro continua contando o seu **tempo extra**.")
+                            st.markdown(f"### ⏱️ `+{_hms(extra)}` <small>(tempo extra)</small>", unsafe_allow_html=True)
+                            if extra >= 3600:
+                                st.warning("⚠️ Já passou 1 hora além do previsto. Se esqueceu o cronômetro ligado, toque em ⏸️ Pausar "
+                                           "ou 🔄 Zerar; os minutos também podem ser corrigidos em 🗓️ Cronograma Semanal.")
                         c1, c2, c3 = st.columns(3)
                         with c1:
                             if st.button("▶️ Iniciar / Continuar", key=f"cr_start_{topico_id}"):
@@ -1353,7 +1360,7 @@ if menu == "📅 Meta & Rotina do Dia":
                                 set_timer_stop(topico_id)
                                 st.rerun()
 
-                        # minutos já cronometrados neste bloco
+                        # minutos já cronometrados neste bloco (inclui o tempo extra, quando o "restante" fica negativo)
                         minutos_cronometrados = max(0, round((minutos_plan * 60 - seg_restantes) / 60)) if timer_data['status'] != 'STOPPED' else 0
 
                         minutos_ja = int(row['minutos_estudados'] or 0)

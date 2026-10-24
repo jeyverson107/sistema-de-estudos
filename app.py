@@ -1346,6 +1346,154 @@ def aplicar_reta_final(conn, meta_id, plano):
     return n
 
 
+def blocos_atrasados(conn, meta_id, hoje=None):
+    """Blocos de dias anteriores a hoje que não foram concluídos (no fim de semana: toda a semana que passou)."""
+    hoje = hoje or hoje_local()
+    inicio = datetime.date.fromisoformat(get_config(f"cronograma_inicio_{meta_id}", CRONO_INICIO.isoformat()))
+    idx = _idx_de_data(inicio, hoje)
+    return pd.read_sql_query("""
+        SELECT t.id, t.nome, t.bloco, t.minutos_planejados, t.minutos_estudados, t.status, m.nome as materia
+        FROM topicos t JOIN materias m ON t.materia_id = m.id
+        WHERE m.meta_id = ? AND t.semana IS NOT NULL AND (t.semana - 1) * 5 + t.dia < ? AND t.status != 'Concluído'
+        ORDER BY t.semana, t.dia, t.ordem""", conn, params=(int(meta_id), int(idx)))
+
+# -----------------------------------------------------------------------------
+# NOVO: CARTÃO DE BLOCO (usado nos blocos de hoje e nas pendências do fim de semana)
+# Cronômetro + questões (acertos/erros) + concluir/parcial, tudo no mesmo lugar.
+# Devolve True se o cronômetro deste bloco estiver rodando (a tela atualiza a cada segundo).
+# -----------------------------------------------------------------------------
+def _hms(seg):
+    return f"{seg // 3600:02d}:{(seg % 3600) // 60:02d}:{seg % 60:02d}"
+
+def cartao_bloco(conn, row, meta_id, mostrar_data=False, expandido=None):
+    topico_id = int(row['id'])
+    minutos_plan = int(row['minutos_planejados'] or 0)
+    icone = "✅" if row['status'] == "Concluído" else ("⏳" if row['status'] == "Parcial" else "📖")
+    data_txt = (row['nome'].split(' · ', 1)[0][4:] + " · ") if mostrar_data and ' · ' in row['nome'] else ""
+    titulo = f"{icone} {data_txt}**{row['bloco']} · {row['materia']}** | {minutos_plan} min"
+    if mostrar_data:
+        titulo += f" · {row['nome'].split(' · ', 1)[-1][:60]}"
+    with st.expander(titulo, expanded=(row['status'] != "Concluído") if expandido is None else expandido):
+        st.markdown(f"**Conteúdo:** {row['nome'].split(' · ', 1)[-1]}")
+        orientacao = buscar_orientacao(conn, row['materia'], row['nome'])
+        if orientacao:
+            st.info("📌 **Orientação**\n\n" + orientacao)
+        if row['materia'] == REV and row['status'] != "Concluído":
+            _foco = foco_sugerido(conn, meta_id)
+            if _foco:
+                st.success(f"🧠 **Foco sugerido pelo seu desempenho:** {_foco['materia']} "
+                           f"({_foco['pct']:.0%} de acerto em {int(_foco['feitas'])} questões). "
+                           "Use este bloco para o caderno de erros e questões dessa matéria.")
+        if st.toggle("✏️ Escrever ou editar a orientação", key=f"ori_tg_{topico_id}"):
+            novo_txt = st.text_area("Orientação", value=orientacao, height=150,
+                                    key=f"ori_{topico_id}", label_visibility="collapsed")
+            if st.button("💾 Salvar orientação", key=f"ori_salvar_{topico_id}"):
+                try:
+                    salvar_orientacao(conn, row['materia'], row['nome'], novo_txt)
+                    ok = buscar_orientacao(conn, row['materia'], row['nome']) == novo_txt.strip()
+                    avisar("Orientação salva e conferida." if ok else
+                           "Orientação apagada." if not novo_txt.strip() else "A orientação não foi confirmada no banco. Tente de novo.",
+                           "success" if ok or not novo_txt.strip() else "error")
+                except Exception as e:
+                    avisar(f"Orientação NÃO salva. Erro: {e}", "error")
+                st.rerun()
+        q_ja = conn.execute("SELECT COALESCE(SUM(acertos),0), COALESCE(SUM(erros),0) FROM exercicios WHERE topico_id = ?",
+                            (topico_id,)).fetchone()
+        st.write(f"**Status:** `{row['status']}` · **Minutos registrados:** {int(row['minutos_estudados'] or 0)}"
+                 + (f" · **Questões:** {q_ja[0] + q_ja[1]} ({q_ja[0]} acertos)" if q_ja[0] + q_ja[1] else ""))
+
+        # cronômetro (em bloco Parcial parte do que FALTA; no zero continua contando o tempo extra)
+        minutos_reg = int(row['minutos_estudados'] or 0)
+        base_seg = ((minutos_plan - minutos_reg) if row['status'] == "Parcial" and 0 < minutos_reg < minutos_plan
+                    else minutos_plan) * 60
+        timer_data = get_timer_state(topico_id, base_seg)
+        seg_restantes = timer_data['restante']
+        if seg_restantes >= 0:
+            st.markdown(f"### ⏳ `{_hms(seg_restantes)}`")
+        else:
+            extra = -seg_restantes
+            st.success("🔔 Tempo previsto do bloco cumprido! O cronômetro continua contando o seu **tempo extra**.")
+            st.markdown(f"### ⏱️ `+{_hms(extra)}` <small>(tempo extra)</small>", unsafe_allow_html=True)
+            if extra >= 3600:
+                st.warning("⚠️ Já passou 1 hora além do previsto. Se esqueceu o cronômetro ligado, toque em ⏸️ Pausar "
+                           "ou 🔄 Zerar; os minutos também podem ser corrigidos em 🗓️ Cronograma Semanal.")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            if st.button("▶️ Iniciar / Continuar", key=f"cr_start_{topico_id}"):
+                set_timer_start(topico_id, seg_restantes)
+                st.rerun()
+        with c2:
+            if st.button("⏸️ Pausar", key=f"cr_pause_{topico_id}"):
+                set_timer_pause(topico_id, seg_restantes)
+                st.rerun()
+        with c3:
+            if st.button("🔄 Zerar", key=f"cr_reset_{topico_id}"):
+                set_timer_stop(topico_id)
+                st.rerun()
+        minutos_cronometrados = max(0, round((base_seg - seg_restantes) / 60)) if timer_data['status'] != 'STOPPED' else 0
+
+        # NOVO: questões feitas neste bloco (gravadas junto ao concluir, ou no botão próprio)
+        versao = st.session_state.get(f"q_ver_{topico_id}", 0)
+        st.markdown("**📝 Questões deste bloco** (opcional)")
+        q1, q2 = st.columns(2)
+        with q1:
+            q_total = st.number_input("Questões feitas", min_value=0, max_value=500, value=0, step=1,
+                                      key=f"q_tot_{topico_id}_{versao}")
+        with q2:
+            q_erros = st.number_input("Quantas errei", min_value=0, max_value=500, value=0, step=1,
+                                      key=f"q_err_{topico_id}_{versao}")
+        if q_erros > q_total:
+            st.warning("O número de erros não pode ser maior que o de questões feitas.")
+
+        def _gravar_questoes():
+            """Grava as questões digitadas (se houver). Devolve texto para o aviso, ou None se houve erro."""
+            if q_total == 0:
+                return ""
+            if q_erros > q_total:
+                avisar("Questões NÃO registradas: há mais erros do que questões feitas.", "error")
+                return None
+            c = conn.cursor()
+            c.execute("INSERT INTO exercicios (data, topico_id, acertos, erros) VALUES (?, ?, ?, ?)",
+                      (hoje_local().isoformat(), topico_id, int(q_total - q_erros), int(q_erros)))
+            conn.commit()
+            st.session_state[f"q_ver_{topico_id}"] = versao + 1  # limpa os campos
+            return f" Questões: {q_total - q_erros} acertos e {q_erros} erros registrados."
+
+        if st.button("💾 Registrar só as questões", key=f"q_salvar_{topico_id}"):
+            txt = _gravar_questoes()
+            if txt:
+                avisar("Salvo e conferido." + txt)
+            elif txt == "":
+                avisar("Nada foi salvo: informe quantas questões fez.", "warning")
+            st.rerun()
+
+        minutos_ja = int(row['minutos_estudados'] or 0)
+        col_a, col_b = st.columns(2)
+        with col_a:
+            if st.button("✅ Concluí este bloco", key=f"cr_conc_{topico_id}"):
+                txt = _gravar_questoes()
+                if txt is not None:
+                    if minutos_cronometrados > 0:
+                        minutos = minutos_ja + minutos_cronometrados
+                    else:
+                        minutos = minutos_ja if minutos_ja > 0 else minutos_plan
+                    salvar_status_com_aviso(conn, topico_id, "Concluído", minutos)
+                    if txt:
+                        st.session_state.setdefault("_avisos", []).append(("success", txt.strip()))
+                    set_timer_stop(topico_id)
+                st.rerun()
+        with col_b:
+            if st.button("⏳ Fiz só uma parte", key=f"cr_parc_{topico_id}"):
+                txt = _gravar_questoes()
+                if txt is not None:
+                    salvar_status_com_aviso(conn, topico_id, "Parcial", minutos_ja + minutos_cronometrados)
+                    if txt:
+                        st.session_state.setdefault("_avisos", []).append(("success", txt.strip()))
+                    set_timer_stop(topico_id)
+                st.rerun()
+    return timer_data['status'] == 'RODANDO'
+
+
 menu = st.sidebar.radio("Navegação", [
     "📅 Meta & Rotina do Dia",
     "🧭 Planejar Estudos",
@@ -1459,16 +1607,24 @@ if menu == "📅 Meta & Rotina do Dia":
                 st.success(f"🏁 O cronograma de {n_semanas} semanas terminou. Boa prova!")
             elif dia_hoje > 4:
                 st.info(f"📆 Hoje é fim de semana (semana {semana_hoje}). Use o tempo livre para repor o que ficou pendente:")
-                df_pend = pd.read_sql_query("""
-                    SELECT t.nome as Tópico, m.nome as Matéria, t.status as Status
-                    FROM topicos t JOIN materias m ON t.materia_id = m.id
-                    WHERE m.meta_id = ? AND t.semana = ? AND t.status != 'Concluído'
-                    ORDER BY t.dia, t.ordem
-                """, conn, params=(int(meta_id_rotina), int(semana_hoje)))
-                if df_pend.empty:
-                    st.success("🎉 Nada pendente nesta semana!")
+                df_atr = blocos_atrasados(conn, meta_id_rotina)
+                if df_atr.empty:
+                    st.success("🎉 Nada pendente: você está em dia!")
                 else:
-                    st.dataframe(df_pend, use_container_width=True, hide_index=True)
+                    resumo = pd.DataFrame({"Dia": df_atr["nome"].apply(lambda n: n.split(" · ", 1)[0][4:]),
+                                           "Matéria": df_atr["materia"],
+                                           "Tópico": df_atr["nome"].apply(lambda n: n.split(" · ", 1)[-1]),
+                                           "Previsto (min)": df_atr["minutos_planejados"],
+                                           "Status": df_atr["status"]})
+                    st.dataframe(resumo, use_container_width=True, hide_index=True)
+                    st.markdown("**Escolha uma pendência abaixo:** use o cronômetro, registre as questões e conclua. "
+                                "O que você não fizer continua pendente.")
+                    rodando = False
+                    for _, row in df_atr.iterrows():
+                        rodando = cartao_bloco(conn, row, meta_id_rotina, mostrar_data=True, expandido=False) or rodando
+                    if rodando:
+                        time.sleep(1)
+                        st.rerun()
             else:
                 idx_hoje = (semana_hoje - 1) * 5 + dia_hoje
                 hoje_iso = hoje_local().isoformat()
@@ -1520,89 +1676,20 @@ if menu == "📅 Meta & Rotina do Dia":
                 if df_hoje.empty:
                     st.info("Nenhum bloco previsto para hoje." if hoje_iso not in escalas else
                             "Hoje é dia de escala: sem blocos. Bom serviço!")
+                rodando = False
                 for _, row in df_hoje.iterrows():
-                    topico_id = int(row['id'])
-                    minutos_plan = int(row['minutos_planejados'] or 0)
-                    icone = "✅" if row['status'] == "Concluído" else ("⏳" if row['status'] == "Parcial" else "📖")
-                    with st.expander(f"{icone} **{row['bloco']} · {row['materia']}** | {minutos_plan} min", expanded=row['status'] != "Concluído"):
-                        st.markdown(f"**Conteúdo:** {row['nome'].split(' · ', 1)[-1]}")
-                        orientacao = buscar_orientacao(conn, row['materia'], row['nome'])
-                        if orientacao:
-                            st.info("📌 **Orientação**\n\n" + orientacao)
-                        if row['materia'] == REV and row['status'] != "Concluído":
-                            _foco = foco_sugerido(conn, meta_id_rotina)
-                            if _foco:
-                                st.success(f"🧠 **Foco sugerido pelo seu desempenho:** {_foco['materia']} "
-                                           f"({_foco['pct']:.0%} de acerto em {int(_foco['feitas'])} questões). "
-                                           "Use este bloco para o caderno de erros e questões dessa matéria.")
-                        if st.toggle("✏️ Escrever ou editar a orientação", key=f"ori_tg_{topico_id}"):
-                            novo_txt = st.text_area("Orientação", value=orientacao, height=150,
-                                                    key=f"ori_{topico_id}", label_visibility="collapsed")
-                            if st.button("💾 Salvar orientação", key=f"ori_salvar_{topico_id}"):
-                                try:
-                                    salvar_orientacao(conn, row['materia'], row['nome'], novo_txt)
-                                    avisar("Orientação salva e conferida." if buscar_orientacao(conn, row['materia'], row['nome']) == novo_txt.strip()
-                                           else "Orientação apagada." if not novo_txt.strip() else "A orientação não foi confirmada no banco. Tente de novo.",
-                                           "success" if buscar_orientacao(conn, row['materia'], row['nome']) == novo_txt.strip() or not novo_txt.strip() else "error")
-                                except Exception as e:
-                                    avisar(f"Orientação NÃO salva. Erro: {e}", "error")
-                                st.rerun()
-                        st.write(f"**Status:** `{row['status']}` · **Minutos registrados:** {int(row['minutos_estudados'] or 0)}")
-
-                        # NOVO: em bloco Parcial o cronômetro parte do que FALTA (previsto - já registrado)
-                        minutos_reg = int(row['minutos_estudados'] or 0)
-                        base_seg = ((minutos_plan - minutos_reg) if row['status'] == "Parcial" and 0 < minutos_reg < minutos_plan
-                                    else minutos_plan) * 60
-                        timer_data = get_timer_state(topico_id, base_seg)
-                        seg_restantes = timer_data['restante']
-                        def _hms(seg):
-                            return f"{seg // 3600:02d}:{(seg % 3600) // 60:02d}:{seg % 60:02d}"
-                        if seg_restantes >= 0:
-                            st.markdown(f"### ⏳ `{_hms(seg_restantes)}`")
-                        else:
-                            extra = -seg_restantes
-                            st.success("🔔 Tempo previsto do bloco cumprido! O cronômetro continua contando o seu **tempo extra**.")
-                            st.markdown(f"### ⏱️ `+{_hms(extra)}` <small>(tempo extra)</small>", unsafe_allow_html=True)
-                            if extra >= 3600:
-                                st.warning("⚠️ Já passou 1 hora além do previsto. Se esqueceu o cronômetro ligado, toque em ⏸️ Pausar "
-                                           "ou 🔄 Zerar; os minutos também podem ser corrigidos em 🗓️ Cronograma Semanal.")
-                        c1, c2, c3 = st.columns(3)
-                        with c1:
-                            if st.button("▶️ Iniciar / Continuar", key=f"cr_start_{topico_id}"):
-                                set_timer_start(topico_id, seg_restantes)
-                                st.rerun()
-                        with c2:
-                            if st.button("⏸️ Pausar", key=f"cr_pause_{topico_id}"):
-                                set_timer_pause(topico_id, seg_restantes)
-                                st.rerun()
-                        with c3:
-                            if st.button("🔄 Zerar", key=f"cr_reset_{topico_id}"):
-                                set_timer_stop(topico_id)
-                                st.rerun()
-
-                        # minutos já cronometrados neste bloco (inclui o tempo extra, quando o "restante" fica negativo)
-                        minutos_cronometrados = max(0, round((base_seg - seg_restantes) / 60)) if timer_data['status'] != 'STOPPED' else 0
-
-                        minutos_ja = int(row['minutos_estudados'] or 0)
-                        col_a, col_b = st.columns(2)
-                        with col_a:
-                            if st.button("✅ Concluí este bloco", key=f"cr_conc_{topico_id}"):
-                                if minutos_cronometrados > 0:
-                                    minutos = minutos_ja + minutos_cronometrados
-                                else:
-                                    minutos = minutos_ja if minutos_ja > 0 else minutos_plan
-                                salvar_status_com_aviso(conn, topico_id, "Concluído", minutos)
-                                set_timer_stop(topico_id)
-                                st.rerun()
-                        with col_b:
-                            if st.button("⏳ Fiz só uma parte", key=f"cr_parc_{topico_id}"):
-                                salvar_status_com_aviso(conn, topico_id, "Parcial", minutos_ja + minutos_cronometrados)
-                                set_timer_stop(topico_id)
-                                st.rerun()
-
-                        if timer_data['status'] == 'RODANDO':
-                            time.sleep(1)
-                            st.rerun()
+                    rodando = cartao_bloco(conn, row, meta_id_rotina) or rodando
+                # NOVO: pendências de dias anteriores, com o mesmo cartão (fechadas para não poluir)
+                df_atr = blocos_atrasados(conn, meta_id_rotina)
+                if not df_atr.empty:
+                    st.subheader(f"🔁 Pendências atrasadas ({len(df_atr)})")
+                    st.caption("Blocos de dias anteriores que ainda não foram concluídos. Abra um, use o cronômetro, "
+                               "registre as questões e conclua. O que sobrar continua aqui.")
+                    for _, row in df_atr.iterrows():
+                        rodando = cartao_bloco(conn, row, meta_id_rotina, mostrar_data=True, expandido=False) or rodando
+                if rodando:
+                    time.sleep(1)
+                    st.rerun()
             conn.close()
             st.stop()
 

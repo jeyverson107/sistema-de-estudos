@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 estudos_master.db
 estudos_u*.db
+estudos_u*.db.sinc

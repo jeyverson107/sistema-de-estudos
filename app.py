@@ -114,6 +114,25 @@ def _nuvem_cfg():
         return b[0], b[1], _usuario()["sessao"]
     return None
 
+def _marcar_sinc(caminho_db):
+    """Anota o 'momento' do arquivo no último envio/download (arquivo .sinc ao lado do banco)."""
+    try:
+        with open(caminho_db + ".sinc", "w") as f:
+            f.write(str(os.path.getmtime(caminho_db)))
+    except Exception:
+        pass
+
+def _tem_mudanca_local(caminho_db, ts_nuvem):
+    """True se o arquivo do servidor mudou depois da última sincronização."""
+    if not os.path.exists(caminho_db):
+        return False
+    try:
+        with open(caminho_db + ".sinc") as f:
+            return os.path.getmtime(caminho_db) > float(f.read().strip()) + 1
+    except Exception:
+        # sem marcador (arquivos de antes desta versão): compara com a data da última cópia na nuvem
+        return bool(ts_nuvem) and os.path.getmtime(caminho_db) > ts_nuvem + 5
+
 @st.cache_resource
 def _nuvem_estado_da_sessao(sessao, caminho_db):
     """Roda UMA vez por login: traz da nuvem a versão mais recente do banco DESTE usuário."""
@@ -121,10 +140,19 @@ def _nuvem_estado_da_sessao(sessao, caminho_db):
     try:
         r = _rpc("ler_banco_u", {"p_sessao": sessao})
         if r and r.get("dados"):
-            conteudo = _zlib.decompress(_b64.b64decode(r["dados"]))
-            with open(caminho_db, "wb") as f:
-                f.write(conteudo)
-            est.update(status="ok", ultima=r.get("criado_em"))
+            try:
+                ts_nuvem = pd.to_datetime(r.get("criado_em")).timestamp()
+            except Exception:
+                ts_nuvem = None
+            if _tem_mudanca_local(caminho_db, ts_nuvem):
+                # o arquivo do servidor tem alterações que não chegaram à nuvem: guarda-as em vez de apagar
+                est.update(status="ok", ultima=r.get("criado_em"), pendente=True)
+            else:
+                conteudo = _zlib.decompress(_b64.b64decode(r["dados"]))
+                with open(caminho_db, "wb") as f:
+                    f.write(conteudo)
+                _marcar_sinc(caminho_db)
+                est.update(status="ok", ultima=r.get("criado_em"), mtime_enviado=os.path.getmtime(caminho_db))
         else:
             if os.path.exists(caminho_db):
                 os.remove(caminho_db)  # conta nova: começa vazia (nunca herda arquivo de outra sessão)
@@ -148,15 +176,28 @@ def nuvem_enviar():
     if est["status"] == "erro":
         return False, "envio bloqueado: o app não conseguiu ler a nuvem ao abrir"
     try:
+        mtime = os.path.getmtime(DB_PATH)
         with open(DB_PATH, "rb") as f:
             dados = _b64.b64encode(_zlib.compress(f.read(), 9)).decode()
         r = _rpc("salvar_banco_u", {"p_sessao": _nuvem_cfg()[2], "p_dados": dados})
-        est.update(status="ok", ultima=(r or {}).get("criado_em"))
+        est.update(status="ok", ultima=(r or {}).get("criado_em"), mtime_enviado=mtime, pendente=False)
+        _marcar_sinc(DB_PATH) if os.path.getmtime(DB_PATH) == mtime else None
         return True, "ok"
     except Exception as e:
         if "sessao invalida" in str(e):
             return False, "sua sessão expirou (7 dias). Toque em 🚪 Sair e entre de novo"
         return False, str(e)
+
+def sincronizar_se_mudou():
+    """Se o banco mudou desde o último envio (em QUALQUER tela), manda a cópia para a nuvem."""
+    est = nuvem_estado()
+    if not est["ativa"] or est["status"] not in ("ok", "vazia") or not os.path.exists(DB_PATH):
+        return
+    if est.get("pendente") or os.path.getmtime(DB_PATH) > est.get("mtime_enviado", 0):
+        ok, det = nuvem_enviar()
+        if not ok:
+            st.error(f"☁️ Uma alteração NÃO foi guardada na nuvem ({det}). Ela continua no app; "
+                     "o app tenta de novo na próxima ação.")
 
 if LOGIN_ATIVO and "sessao invalida" in nuvem_estado().get("erro", ""):
     _nuvem_estado_da_sessao.clear()
@@ -1686,6 +1727,7 @@ if nuvem_estado()['status'] == 'vazia':
 ajuste_estatuto_14_10(conn)
 recomeco_automatico_20_10(conn)
 ajuste_titulos_2026_10_22(conn)
+sincronizar_se_mudou()
 
 # =============================================================================
 # MENU 1: META & ROTINA DO DIA
@@ -1795,6 +1837,7 @@ if menu == "📅 Meta & Rotina do Dia":
                 if rodando:
                     time.sleep(1)
                     st.rerun()
+            sincronizar_se_mudou()
             conn.close()
             st.stop()
 
@@ -1925,8 +1968,8 @@ elif menu == "🧭 Planejar Estudos":
                     n = carregar_cronograma(conn, edital["objetivo"], inicio_seg, itens_plan, edital.get("tipo", "Concurso"),
                                             substituir=existe_meta)
                     set_config("horas_estudo_dia", horas_plan)
-                    st.success(f"Cronograma gerado: {n} blocos. Veja em '🗓️ Cronograma Semanal' e em '📅 Meta & Rotina do Dia'.")
-                    st.balloons()
+                    avisar(f"Cronograma gerado: {n} blocos. Veja em '🗓️ Cronograma Semanal' e em '📅 Meta & Rotina do Dia'.")
+                    st.rerun()
         else:
             st.info("Marque suas matérias e toque em **📊 Calcular distribuição do tempo**.")
 
@@ -2953,7 +2996,8 @@ elif menu == "⚙️ Gerenciador":
                 if st.button("✅ Salvar estas orientações", type="primary"):
                     for m, t, txt in itens_or:
                         salvar_orientacao(conn, m, t, txt)
-                    st.success("Orientações salvas! Elas aparecem embaixo de cada bloco em '📅 Meta & Rotina do Dia'.")
+                    avisar("Orientações salvas! Elas aparecem embaixo de cada bloco em '📅 Meta & Rotina do Dia'.")
+                    st.rerun()
         elif arq_crono is not None and eh_edital:
             edital_lido, erros_ed = ler_arquivo_edital(_bruto)
             if erros_ed:
@@ -2968,7 +3012,8 @@ elif menu == "⚙️ Gerenciador":
                              use_container_width=True, hide_index=True)
                 if st.button("✅ Salvar este edital", type="primary"):
                     salvar_edital(conn, edital_lido)
-                    st.success("Edital salvo! Agora vá em '🧭 Planejar Estudos' para marcar seu conhecimento e gerar o cronograma.")
+                    avisar("Edital salvo! Agora vá em '🧭 Planejar Estudos' para marcar seu conhecimento e gerar o cronograma.")
+                    st.rerun()
         elif arq_crono is not None:
             dados_crono, erros_crono = ler_arquivo_cronograma(arq_crono.getvalue())
             if erros_crono:
@@ -3065,4 +3110,5 @@ elif menu == "⚙️ Gerenciador":
                         avisar(f"NÃO foi apagado. Erro: {e}", "error")
                     st.rerun()
 
+sincronizar_se_mudou()
 conn.close()

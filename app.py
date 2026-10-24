@@ -13,63 +13,135 @@ st.set_page_config(page_title="Sistema de Estudos & Carreira", layout="wide", pa
 # BANCO DE DADOS DINÂMICO (CAMINHO ABSOLUTO FIXO)
 # -----------------------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "estudos_master.db")
 
 def hoje_local():
     """Data de hoje no horário do Recife (o servidor do Streamlit usa outro fuso)."""
     return datetime.datetime.now(ZoneInfo("America/Recife")).date()
 
 # -----------------------------------------------------------------------------
-# NOVO: GUARDA PERMANENTE NA NUVEM (Supabase)
+# GUARDA PERMANENTE NA NUVEM (Supabase) + LOGIN
 # O Streamlit Cloud apaga os arquivos quando o app dorme ou reinicia. Por isso o
-# banco é baixado da nuvem ao abrir e enviado de volta a cada gravação.
+# banco é baixado da nuvem ao entrar e enviado de volta a cada gravação.
+# NOVO (24/10/2026): cada pessoa entra com usuário e senha e tem o SEU banco,
+# separado na nuvem. A primeira conta criada é a do dono e herda os dados antigos.
 # -----------------------------------------------------------------------------
 import base64 as _b64, zlib as _zlib
 import requests as _req
 
-def _nuvem_cfg():
+def _nuvem_basico():
     try:
         sec = st.secrets["nuvem"]
-        url, chave, token = sec.get("url"), sec.get("chave_publica"), sec.get("token")
-        if url and chave and token:
-            return str(url).rstrip("/"), str(chave), str(token)
+        url, chave = sec.get("url"), sec.get("chave_publica")
+        if url and chave:
+            return str(url).rstrip("/"), str(chave)
     except Exception:
         pass
     return None
 
-def _nuvem_rpc(nome, payload):
-    url, chave, _ = _nuvem_cfg()
+def _rpc(nome, payload):
+    url, chave = _nuvem_basico()
     r = _req.post(f"{url}/rest/v1/rpc/{nome}", json=payload, timeout=25,
                   headers={"apikey": chave, "Authorization": f"Bearer {chave}", "Content-Type": "application/json"})
     if r.status_code >= 400:
         raise RuntimeError(f"{r.status_code}: {r.text[:200]}")
-    return r.json()
+    return r.json() if r.text else None
+
+def _usuario():
+    return st.session_state.get("usuario")
+
+def tela_login():
+    st.title("🛡️ Sistema de Estudos")
+    st.caption("Cada pessoa tem sua própria conta: ninguém vê os dados de ninguém.")
+    if st.session_state.get("_avisos_login"):
+        st.warning(st.session_state.pop("_avisos_login"))
+    aba_entrar, aba_criar, aba_esqueci = st.tabs(["🔑 Entrar", "🆕 Criar conta", "❓ Esqueci a senha"])
+    with aba_entrar:
+        with st.form("form_entrar"):
+            u = st.text_input("Usuário")
+            s = st.text_input("Senha", type="password")
+            if st.form_submit_button("Entrar", type="primary"):
+                try:
+                    r = _rpc("entrar", {"p_usuario": u, "p_senha": s})
+                except Exception as e:
+                    st.error(f"Não consegui falar com a nuvem. Tente de novo em 1 minuto. Detalhe: {str(e)[:150]}")
+                else:
+                    if r and r.get("ok"):
+                        st.session_state["usuario"] = {"id": int(r["usuario_id"]), "nome": r["usuario"],
+                                                       "admin": bool(r["admin"]), "sessao": r["sessao"]}
+                        st.rerun()
+                    else:
+                        st.error((r or {}).get("mensagem", "Não foi possível entrar."))
+    with aba_criar:
+        st.write("Primeiro acesso? Escolha um usuário e uma senha.")
+        with st.form("form_criar"):
+            u = st.text_input("Usuário (letras minúsculas e números, sem espaços)")
+            s1 = st.text_input("Senha (mínimo 6 caracteres)", type="password")
+            s2 = st.text_input("Repita a senha", type="password")
+            if st.form_submit_button("Criar conta", type="primary"):
+                if s1 != s2:
+                    st.error("As duas senhas não são iguais.")
+                else:
+                    try:
+                        r = _rpc("criar_conta", {"p_usuario": u, "p_senha": s1})
+                        if r and r.get("ok"):
+                            e = _rpc("entrar", {"p_usuario": u, "p_senha": s1})
+                            st.session_state["usuario"] = {"id": int(e["usuario_id"]), "nome": e["usuario"],
+                                                           "admin": bool(e["admin"]), "sessao": e["sessao"]}
+                            st.session_state["_avisos"] = [("success",
+                                "Conta criada! Você é o dono do app: seus dados antigos foram ligados a esta conta."
+                                if r.get("admin") else "Conta criada! Seu espaço começa vazio e é só seu.")]
+                            st.rerun()
+                        else:
+                            st.error((r or {}).get("mensagem", "Não foi possível criar a conta."))
+                    except Exception as e:
+                        st.error(f"Não consegui falar com a nuvem. Tente de novo em 1 minuto. Detalhe: {str(e)[:150]}")
+    with aba_esqueci:
+        st.info("Peça ao dono do app para redefinir sua senha. Ele cria uma senha provisória para você; "
+                "depois de entrar, troque-a no menu lateral em **🔐 Trocar minha senha**.")
+
+LOGIN_ATIVO = _nuvem_basico() is not None
+if LOGIN_ATIVO and not _usuario():
+    tela_login()
+    st.stop()
+
+# cada usuário tem o seu arquivo de banco no servidor
+DB_PATH = os.path.join(BASE_DIR, f"estudos_u{_usuario()['id']}.db" if _usuario() else "estudos_master.db")
+
+def _nuvem_cfg():
+    """(url, chave pública, sessão do usuário) ou None se a nuvem não estiver configurada."""
+    b = _nuvem_basico()
+    if b and _usuario():
+        return b[0], b[1], _usuario()["sessao"]
+    return None
 
 @st.cache_resource
-def nuvem_estado():
-    """Roda UMA vez quando o app liga: traz da nuvem a versão mais recente do banco."""
-    _versao_leitura = "2026-10-20"  # muda a cada atualização importante: força reler a nuvem
-    est = {"ativa": False, "status": "desligada", "ultima": None, "erro": ""}
-    cfg = _nuvem_cfg()
-    if not cfg:
-        return est
-    est["ativa"] = True
+def _nuvem_estado_da_sessao(sessao, caminho_db):
+    """Roda UMA vez por login: traz da nuvem a versão mais recente do banco DESTE usuário."""
+    est = {"ativa": True, "status": "desligada", "ultima": None, "erro": ""}
     try:
-        r = _nuvem_rpc("ler_banco", {"p_token": cfg[2]})
+        r = _rpc("ler_banco_u", {"p_sessao": sessao})
         if r and r.get("dados"):
             conteudo = _zlib.decompress(_b64.b64decode(r["dados"]))
-            with open(DB_PATH, "wb") as f:
+            with open(caminho_db, "wb") as f:
                 f.write(conteudo)
             est.update(status="ok", ultima=r.get("criado_em"))
         else:
-            est.update(status="vazia")  # primeira vez: o banco local será enviado
+            if os.path.exists(caminho_db):
+                os.remove(caminho_db)  # conta nova: começa vazia (nunca herda arquivo de outra sessão)
+            est.update(status="vazia")
     except Exception as e:
         # Sem conseguir ler a nuvem, NÃO enviamos nada (para não sobrescrever seus dados com um banco vazio)
         est.update(status="erro", erro=str(e))
     return est
 
+def nuvem_estado():
+    cfg = _nuvem_cfg()
+    if not cfg:
+        return {"ativa": False, "status": "desligada", "ultima": None, "erro": ""}
+    return _nuvem_estado_da_sessao(cfg[2], DB_PATH)
+
 def nuvem_enviar():
-    """Envia o banco inteiro para a nuvem. Devolve (ok, mensagem)."""
+    """Envia o banco inteiro do usuário para a nuvem. Devolve (ok, mensagem)."""
     est = nuvem_estado()
     if not est["ativa"]:
         return False, "nuvem desligada"
@@ -78,11 +150,19 @@ def nuvem_enviar():
     try:
         with open(DB_PATH, "rb") as f:
             dados = _b64.b64encode(_zlib.compress(f.read(), 9)).decode()
-        r = _nuvem_rpc("salvar_banco", {"p_token": _nuvem_cfg()[2], "p_dados": dados})
+        r = _rpc("salvar_banco_u", {"p_sessao": _nuvem_cfg()[2], "p_dados": dados})
         est.update(status="ok", ultima=(r or {}).get("criado_em"))
         return True, "ok"
     except Exception as e:
+        if "sessao invalida" in str(e):
+            return False, "sua sessão expirou (7 dias). Toque em 🚪 Sair e entre de novo"
         return False, str(e)
+
+if LOGIN_ATIVO and "sessao invalida" in nuvem_estado().get("erro", ""):
+    _nuvem_estado_da_sessao.clear()
+    st.session_state.pop("usuario", None)
+    st.session_state["_avisos_login"] = "Sua sessão expirou. Entre de novo."
+    st.rerun()
 
 
 def get_db():
@@ -1505,13 +1585,38 @@ menu = st.sidebar.radio("Navegação", [
     "🧠 Análise e ajuste",
     "⚙️ Gerenciador"
 ])
+if _usuario():
+    with st.sidebar:
+        st.markdown("---")
+        st.markdown(f"👤 **{_usuario()['nome']}**" + (" · dono do app" if _usuario()['admin'] else ""))
+        with st.expander("🔐 Trocar minha senha"):
+            with st.form("form_trocar_senha", clear_on_submit=True):
+                s_atual = st.text_input("Senha atual", type="password")
+                s_nova = st.text_input("Nova senha (mínimo 6)", type="password")
+                s_nova2 = st.text_input("Repita a nova senha", type="password")
+                if st.form_submit_button("Trocar senha"):
+                    if s_nova != s_nova2:
+                        st.error("As duas senhas novas não são iguais.")
+                    else:
+                        try:
+                            r = _rpc("trocar_senha", {"p_sessao": _usuario()["sessao"], "p_atual": s_atual, "p_nova": s_nova})
+                            (st.success if r and r.get("ok") else st.error)((r or {}).get("mensagem", "Erro."))
+                        except Exception as e:
+                            st.error(f"Não foi possível trocar a senha agora. Detalhe: {str(e)[:120]}")
+        if st.button("🚪 Sair"):
+            try:
+                _rpc("sair", {"p_sessao": _usuario()["sessao"]})
+            except Exception:
+                pass
+            st.session_state.pop("usuario", None)
+            st.rerun()
 mostrar_avisos()
 _ne = nuvem_estado()
 if _ne["status"] == "erro":
     st.error("☁️ O app NÃO conseguiu ler seus dados da nuvem ao abrir. Para não perder nada, ele NÃO vai gravar "
              f"na nuvem agora. Toque em \"Tentar de novo\" em 1 minuto; se continuar, me avise. Detalhe: {_ne['erro'][:150]}")
     if st.button("🔄 Tentar ler a nuvem de novo"):
-        nuvem_estado.clear()
+        _nuvem_estado_da_sessao.clear()
         _ne2 = nuvem_estado()
         avisar({"ok": "Nuvem lida com sucesso: seus dados foram carregados.",
                 "vazia": "Nuvem conectada (ainda sem cópias guardadas)."}.get(_ne2["status"], "") if _ne2["status"] in ("ok", "vazia")
@@ -2721,7 +2826,32 @@ elif menu == "🧠 Análise e ajuste":
 elif menu == "⚙️ Gerenciador":
     st.header("⚙️ Gerenciador do Sistema")
     
-    t7, t6 = st.tabs(["🩺 Verificar dados", "📅 Cronogramas"])
+    _abas = ["🩺 Verificar dados", "📅 Cronogramas"] + (["👥 Usuários"] if _usuario() and _usuario()["admin"] else [])
+    _tabs = st.tabs(_abas)
+    t7, t6 = _tabs[0], _tabs[1]
+    if len(_tabs) > 2:
+        with _tabs[2]:
+            st.subheader("👥 Usuários do app")
+            st.caption("Só você (dono) vê esta aba. Cada usuário tem seus próprios dados; daqui você não vê o conteúdo de ninguém.")
+            try:
+                lista = _rpc("admin_listar", {"p_sessao": _usuario()["sessao"]}) or []
+                def _dt(v):
+                    try:
+                        return pd.to_datetime(v).tz_convert("America/Recife").strftime("%d/%m/%Y %H:%M")
+                    except Exception:
+                        return "–"
+                st.dataframe(pd.DataFrame([{"Usuário": u["usuario"], "Dono": "sim" if u["admin"] else "",
+                                            "Criado em": _dt(u["criado_em"]), "Última cópia na nuvem": _dt(u["ultima_copia"])}
+                                           for u in lista]), hide_index=True, use_container_width=True)
+                st.markdown("**🔑 Redefinir a senha de alguém** (quando a pessoa esquecer)")
+                with st.form("form_reset_senha", clear_on_submit=True):
+                    alvo = st.selectbox("Usuário", [u["usuario"] for u in lista if not u["admin"]] or ["(nenhum outro usuário)"])
+                    provisoria = st.text_input("Senha provisória (mínimo 6)")
+                    if st.form_submit_button("Redefinir senha"):
+                        r = _rpc("admin_redefinir_senha", {"p_sessao": _usuario()["sessao"], "p_usuario": alvo, "p_nova": provisoria})
+                        (st.success if r and r.get("ok") else st.error)((r or {}).get("mensagem", "Erro."))
+            except Exception as e:
+                st.error(f"Não consegui carregar os usuários agora. Detalhe: {str(e)[:150]}")
 
     with t7:
         st.subheader("🩺 O que está salvo no app")

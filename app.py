@@ -1361,12 +1361,62 @@ BLOCOS_PROVA_CFO = {
     "Bloco II": ["Matemática", "Física", "Química", "Biologia"],
     "Bloco III": ["Direito Constitucional", "Direito Administrativo", "Legislação dos Militares de PE", "Direito Penal Militar"],
 }
+# Regras de eliminação conferidas no edital oficial de cada concurso (além do CFO)
+REGRAS_CONHECIDAS = {
+    "PCPE 2027 – Agente de Polícia": {
+        "min_total": 30.0, "min_bloco_pct": None, "zerar": False,
+        "fonte": "Edital nº 1 – PCPE (Cebraspe), itens 7.1.1, 8.1 e 8.11",
+        "regra_texto": "eliminado com nota menor que 30 pontos nas objetivas, somando P1 e P2 (item 8.11.4)",
+        "estimado": "O edital diz só o total de cada prova (P1 = 20 e P2 = 40 questões), não quantas questões cada matéria tem. "
+                    "A divisão por matéria é uma estimativa (igual dentro de cada prova).",
+    },
+}
+
+def config_prova(conn, meta_id):
+    """Pesos e regras da prova do objetivo: CFO (embutido) ou edital salvo no app. None se não houver."""
+    r = conn.execute("SELECT nome FROM metas WHERE id = ?", (int(meta_id),)).fetchone()
+    if not r:
+        return None
+    nome = r[0]
+    if nome == CRONO_META_NOME:
+        return {"nome": nome, "cfo": True, "questoes": QUESTOES_PROVA_CFO, "blocos": BLOCOS_PROVA_CFO,
+                "min_total": 21.0, "min_bloco_pct": 0.30, "zerar": True,
+                "fonte": "Tabela 10.2 do edital CBMPE 002/2026",
+                "regra_texto": "eliminado com menos de 30% em algum bloco, zerando alguma matéria ou com menos de 30% no total (item 10.1.4)",
+                "estimado": ""}
+    import json as _js
+    e = conn.execute("SELECT conteudo FROM editais WHERE nome = ?", (nome,)).fetchone()
+    if not e:
+        return None
+    try:
+        ed = _js.loads(e[0])
+    except Exception:
+        return None
+    questoes, blocos = {}, {}
+    for m in ed.get("materias", []):
+        if m.get("tipo") == "redacao":
+            continue
+        pts = float(m.get("pontos") or 0)
+        if pts <= 0:
+            continue
+        nm = normalizar_nome_materia(m["nome"])
+        questoes[nm] = pts
+        blocos.setdefault(m.get("bloco") or "Prova objetiva", []).append(nm)
+    if not questoes:
+        return None
+    regras = REGRAS_CONHECIDAS.get(nome, {"min_total": None, "min_bloco_pct": None, "zerar": False,
+                                          "fonte": "edital salvo no app", "regra_texto": "", "estimado": ""})
+    return {"nome": nome, "cfo": False, "questoes": questoes, "blocos": blocos, **regras}
+
 MIN_QUESTOES_CONFIAVEL = 20   # abaixo disso o app não manda aumentar nem reduzir
 PESO_NEUTRO = 10              # suavização: cada matéria "começa" com 10 questões imaginárias a 50%
 
-def analise_desempenho(conn, meta_id, hoje=None):
+def analise_desempenho(conn, meta_id, hoje=None, cfg=None):
     """Tabela por matéria: questões, acerto, estimativa, pontos projetados, progresso e situação."""
     hoje = hoje or hoje_local()
+    cfg = cfg or config_prova(conn, meta_id)
+    if not cfg:
+        return pd.DataFrame()
     inicio = datetime.date.fromisoformat(get_config(f"cronograma_inicio_{meta_id}", CRONO_INICIO.isoformat()))
     hoje_idx = _idx_de_data(inicio, hoje)
     ex = pd.read_sql_query("""SELECT m.nome AS materia, e.data, e.acertos, e.erros FROM exercicios e
@@ -1378,7 +1428,7 @@ def analise_desempenho(conn, meta_id, hoje=None):
     bl["idx"] = (bl["semana"] - 1) * 5 + bl["dia"]
     corte14 = (hoje - datetime.timedelta(days=14)).isoformat()
     linhas = []
-    for materia, q in QUESTOES_PROVA_CFO.items():
+    for materia, q in cfg["questoes"].items():
         e = ex[ex["materia"] == materia]
         a, n = int(e["acertos"].sum()), int(e["acertos"].sum() + e["erros"].sum())
         e14 = e[e["data"] >= corte14]
@@ -1424,6 +1474,8 @@ def foco_sugerido(conn, meta_id):
     try:
         df = analise_desempenho(conn, meta_id)
     except Exception:
+        return None
+    if df.empty:
         return None
     ok = df[(df["feitas"] >= 10)]
     if ok.empty:
@@ -2742,19 +2794,28 @@ elif menu == "📊 Dashboard de Evolução":
 elif menu == "🧠 Análise e ajuste":
     import altair as alt
     st.header("🧠 Análise e ajuste")
-    meta_an = conn.execute("SELECT id FROM metas WHERE nome = ?", (CRONO_META_NOME,)).fetchone()
-    if not meta_an:
-        st.info("Esta análise, por enquanto, só funciona para o concurso do CFO CBMPE, porque usa o peso de cada matéria "
-                "na prova desse edital. Para outro concurso, peça ao dono do app para incluir a tabela da prova.")
+    _opcoes_an = {}
+    for _mid, _mnome in conn.execute("SELECT id, nome FROM metas WHERE ativa = 1 ORDER BY id").fetchall():
+        _cfg = config_prova(conn, _mid)
+        if _cfg and meta_tem_cronograma(_mid, conn):
+            _opcoes_an[_mnome] = (int(_mid), _cfg)
+    if not _opcoes_an:
+        st.info("A análise aparece quando você tiver um cronograma gerado a partir de um edital salvo no app "
+                "(em 🧭 Planejar Estudos → 🚀 Gerar e salvar cronograma). Ela usa o peso de cada matéria na prova.")
     else:
-        meta_an = int(meta_an[0])
-        df = analise_desempenho(conn, meta_an)
+        _esc = st.selectbox("Objetivo:", list(_opcoes_an.keys())) if len(_opcoes_an) > 1 else list(_opcoes_an.keys())[0]
+        meta_an, cfg_an = _opcoes_an[_esc]
+        TOTAL_Q = int(sum(cfg_an["questoes"].values()))
+        N_MAT = len(cfg_an["questoes"])
+        df = analise_desempenho(conn, meta_an, cfg=cfg_an)
         ritmo = ritmo_cronograma(conn, meta_an)
         total_feitas = int(df["feitas"].sum())
 
         st.caption("Como funciona: o app cruza as questões que você registra (acertos e erros) com o peso de cada matéria "
-                   "na prova (Tabela 10.2 do edital: toda questão vale 1 ponto). Com poucas questões, a estatística engana; "
+                   f"na prova ({cfg_an['fonte']}: toda questão vale 1 ponto). Com poucas questões, a estatística engana; "
                    f"por isso o app só diz \"reforçar\" ou \"aliviar\" a partir de {MIN_QUESTOES_CONFIAVEL} questões numa matéria.")
+        if cfg_an.get("estimado"):
+            st.caption("⚠️ " + cfg_an["estimado"])
 
         # ---------------- 1. ritmo ----------------
         st.subheader("⏱️ Ritmo do cronograma")
@@ -2773,30 +2834,39 @@ elif menu == "🧠 Análise e ajuste":
         com_dados = int((df["feitas"] >= 10).sum())
         nota = df["pontos"].sum()
         c1, c2, c3 = st.columns(3)
-        c1.metric("Nota projetada", f"{nota:.0f} / 70")
+        c1.metric("Nota projetada", f"{nota:.0f} / {TOTAL_Q}")
         c2.metric("Questões registradas", total_feitas)
-        c3.metric("Matérias com dados", f"{com_dados} / 12")
-        if com_dados < 12:
+        c3.metric("Matérias com dados", f"{com_dados} / {N_MAT}")
+        if cfg_an.get("regra_texto"):
+            st.caption(f"Regra do edital: {cfg_an['regra_texto']}.")
+        if cfg_an.get("min_total") and com_dados > 0:
+            if nota < cfg_an["min_total"]:
+                st.error(f"🔴 Projeção abaixo do mínimo de {cfg_an['min_total']:.0f} pontos: isso ELIMINA.")
+            elif nota < cfg_an["min_total"] * 1.15:
+                st.warning(f"🟡 Projeção perto do mínimo de {cfg_an['min_total']:.0f} pontos. Atenção.")
+        if com_dados < N_MAT:
             st.caption("Matérias com menos de 10 questões registradas entram na conta perto de 50% (neutro). "
                        "A projeção fica mais confiável à medida que você registra questões.")
-        for bloco, materias in BLOCOS_PROVA_CFO.items():
+        for bloco, materias in cfg_an["blocos"].items():
             sub = df[df["materia"].isin(materias)]
             q = int(sub["questoes_prova"].sum())
             pts = sub["pontos"].sum()
-            pct = pts / q
+            pct = pts / q if q else 0
             dados = int((sub["feitas"] >= 10).sum())
             texto = f"**{bloco}** ({', '.join(materias)}): {pts:.1f} de {q} ({pct:.0%})"
+            corte = cfg_an.get("min_bloco_pct")
             if dados == 0:
                 st.write(f"⚪ {texto} · sem dados ainda")
-            elif pct < 0.30:
-                st.error(f"🔴 {texto}: abaixo de 30%, isso ELIMINA (item 10.1.4 do edital).")
-            elif pct < 0.45:
-                st.warning(f"🟡 {texto}: perto do corte de 30%. Atenção.")
+            elif corte and pct < corte:
+                st.error(f"🔴 {texto}: abaixo de {corte:.0%}, isso ELIMINA.")
+            elif corte and pct < corte + 0.15:
+                st.warning(f"🟡 {texto}: perto do corte de {corte:.0%}. Atenção.")
             else:
-                st.write(f"🟢 {texto}")
-        zerar = df[(df["feitas"] >= 10) & (df["pct"] < 0.2)]
-        for _, r in zerar.iterrows():
-            st.error(f"⚠️ {r['materia']}: {r['pct']:.0%} de acerto. Zerar uma matéria elimina (item 10.1.4, b).")
+                st.write(f"🟢 {texto}" if pct >= 0.5 else f"🟡 {texto}")
+        if cfg_an.get("zerar"):
+            zerar = df[(df["feitas"] >= 10) & (df["pct"] < 0.2)]
+            for _, r in zerar.iterrows():
+                st.error(f"⚠️ {r['materia']}: {r['pct']:.0%} de acerto. Zerar uma matéria elimina.")
 
         # ---------------- 3. prioridade ----------------
         st.subheader("📌 Onde estudar mais (prioridade)")
@@ -2841,12 +2911,14 @@ elif menu == "🧠 Análise e ajuste":
         else:
             st.info("Registre pelo menos 10 questões em alguma matéria para o app passar a sugerir o foco dos blocos de revisão.")
 
-        st.markdown("**Reta final:** redistribuir os dias de revisão geral pelas matérias que mais podem render pontos.")
-        plano = planejar_reta_final(conn, meta_an, df)
+        if cfg_an["cfo"]:
+            st.markdown("**Reta final:** redistribuir os dias de revisão geral pelas matérias que mais podem render pontos.")
+        plano = planejar_reta_final(conn, meta_an, df) if cfg_an["cfo"] else []
         liberar = hoje_local() >= datetime.date(2027, 2, 1)
         confiaveis = int((df["feitas"] >= MIN_QUESTOES_CONFIAVEL).sum())
         if not plano:
-            st.caption("Não há blocos de revisão pendentes na reta final para redistribuir.")
+            if cfg_an["cfo"]:
+                st.caption("Não há blocos de revisão pendentes na reta final para redistribuir.")
         elif not liberar or confiaveis < 6:
             st.caption(f"Disponível a partir de 01/02/2027 e com pelo menos 6 matérias com {MIN_QUESTOES_CONFIAVEL}+ questões "
                        f"(hoje: {confiaveis}). Antes disso, o resultado mudaria muito de uma semana para outra.")

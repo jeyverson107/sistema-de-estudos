@@ -2744,7 +2744,8 @@ elif menu == "🧠 Análise e ajuste":
     st.header("🧠 Análise e ajuste")
     meta_an = conn.execute("SELECT id FROM metas WHERE nome = ?", (CRONO_META_NOME,)).fetchone()
     if not meta_an:
-        st.info("Esta análise usa a tabela da prova do CFO CBMPE (pesos de cada matéria). Carregue o cronograma do CFO para usá-la.")
+        st.info("Esta análise, por enquanto, só funciona para o concurso do CFO CBMPE, porque usa o peso de cada matéria "
+                "na prova desse edital. Para outro concurso, peça ao dono do app para incluir a tabela da prova.")
     else:
         meta_an = int(meta_an[0])
         df = analise_desempenho(conn, meta_an)
@@ -2949,26 +2950,29 @@ elif menu == "⚙️ Gerenciador":
                    "guardadas). O backup em 📅 Cronogramas continua disponível como segurança extra.")
 
     with t6:
-        st.subheader("📅 Carregar o Cronograma CFO CBMPE 2027")
-        st.write("Cria o objetivo **CFO CBMPE 2027** com 15 matérias e todos os blocos das 20 semanas "
-                 "(12/10/2026 a 26/02/2027), cada um com semana, dia, bloco e minutos previstos.")
-        c = conn.cursor()
-        c.execute("SELECT id FROM metas WHERE nome = ?", (CRONO_META_NOME,))
-        ja_existe = c.fetchone() is not None
-        if ja_existe:
-            st.warning("O cronograma já está carregado. Recarregar APAGA o progresso e as questões registradas nele.")
-            confirmar = st.checkbox("Entendi. Quero apagar e carregar de novo.")
-            if st.button("🔄 Recarregar cronograma", disabled=not confirmar):
-                n = carregar_cronograma_cfo(conn, substituir=True)
-                avisar(f"Cronograma recarregado: {n} blocos.", "success")
-                st.rerun()
-        else:
-            if st.button("🚀 Carregar cronograma", type="primary"):
-                n = carregar_cronograma_cfo(conn)
-                avisar(f"Cronograma carregado: {n} blocos. Veja em '🗓️ Cronograma Semanal'.", "success")
-                st.rerun()
+        if not _usuario() or _usuario()["admin"]:
+            st.subheader("📅 Carregar o Cronograma CFO CBMPE 2027")
+            st.write("Cria o objetivo **CFO CBMPE 2027** com 15 matérias e todos os blocos das 20 semanas "
+                     "(12/10/2026 a 26/02/2027), cada um com semana, dia, bloco e minutos previstos.")
+            c = conn.cursor()
+            c.execute("SELECT id FROM metas WHERE nome = ?", (CRONO_META_NOME,))
+            ja_existe = c.fetchone() is not None
+            if ja_existe:
+                st.warning("O cronograma já está carregado. Recarregar APAGA o progresso e as questões registradas nele.")
+                confirmar = st.checkbox("Entendi. Quero apagar e carregar de novo.")
+                if st.button("🔄 Recarregar cronograma", disabled=not confirmar):
+                    n = carregar_cronograma_cfo(conn, substituir=True)
+                    avisar(f"Cronograma recarregado: {n} blocos.", "success")
+                    st.rerun()
+            else:
+                if st.button("🚀 Carregar cronograma", type="primary"):
+                    n = carregar_cronograma_cfo(conn)
+                    avisar(f"Cronograma carregado: {n} blocos. Veja em '🗓️ Cronograma Semanal'.", "success")
+                    st.rerun()
 
-        st.markdown("---")
+        if not _usuario() or _usuario()["admin"]:
+            st.markdown("---")
+        c = conn.cursor()
         st.subheader("📤 Importar cronograma de outro edital")
         st.write("Envie o edital ao Claude e peça o arquivo **no formato do app**. Ele devolve um **.json**; envie aqui. "
                  "Se for um arquivo de **edital** (matérias e tópicos), ele vai para '🧭 Planejar Estudos'. "
@@ -3052,8 +3056,9 @@ elif menu == "⚙️ Gerenciador":
                                             dados_crono["tipo"], substituir=existe_obj)
                     avisar(f"Cronograma importado: {n} blocos. Veja em '🗓️ Cronograma Semanal'.", "success")
                     st.rerun()
-        st.download_button("⬇️ Baixar modelo (cronograma CFO em .json)", data=gerar_json_cronograma_cfo(),
-                           file_name="modelo_cronograma.json", mime="application/json")
+        if not _usuario() or _usuario()["admin"]:
+            st.download_button("⬇️ Baixar modelo (cronograma CFO em .json)", data=gerar_json_cronograma_cfo(),
+                               file_name="modelo_cronograma.json", mime="application/json")
 
         st.markdown("---")
         st.subheader("💾 Backup do banco de dados")

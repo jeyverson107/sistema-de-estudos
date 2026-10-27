@@ -1525,10 +1525,72 @@ def blocos_atrasados(conn, meta_id, hoje=None):
     inicio = datetime.date.fromisoformat(get_config(f"cronograma_inicio_{meta_id}", CRONO_INICIO.isoformat()))
     idx = _idx_de_data(inicio, hoje)
     return pd.read_sql_query("""
-        SELECT t.id, t.nome, t.bloco, t.minutos_planejados, t.minutos_estudados, t.status, m.nome as materia
+        SELECT t.id, t.nome, t.bloco, t.minutos_planejados, t.minutos_estudados, t.status, m.nome as materia,
+               (t.semana - 1) * 5 + t.dia AS idx
         FROM topicos t JOIN materias m ON t.materia_id = m.id
         WHERE m.meta_id = ? AND t.semana IS NOT NULL AND (t.semana - 1) * 5 + t.dia < ? AND t.status != 'Concluído'
         ORDER BY t.semana, t.dia, t.ordem""", conn, params=(int(meta_id), int(idx)))
+
+DIAS_ABREV = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
+
+def blocos_do_dia(conn, meta_id, idx):
+    return pd.read_sql_query("""
+        SELECT t.id, t.nome, t.bloco, t.minutos_planejados, t.minutos_estudados, t.status, m.nome as materia
+        FROM topicos t JOIN materias m ON t.materia_id = m.id
+        WHERE m.meta_id = ? AND t.semana IS NOT NULL AND (t.semana - 1) * 5 + t.dia = ?
+        ORDER BY t.ordem""", conn, params=(int(meta_id), int(idx)))
+
+def abas_por_dia(conn, meta_id, inicio, idx_ref, hoje, conteudo_hoje=None, dias_atras=3, dias_frente=2):
+    """Abas: (Hoje) + até 3 dias anteriores COM pendência (+ 'Mais antigos') + próximos dias.
+    Cada bloco aparece com o cartão completo (cronômetro, questões, concluir). Devolve True se algum cronômetro roda."""
+    def data_do(idx):
+        return inicio + datetime.timedelta(weeks=idx // 5, days=idx % 5)
+    atr = blocos_atrasados(conn, meta_id, hoje)
+    dias_pend = sorted(atr["idx"].unique(), reverse=True) if not atr.empty else []
+    recentes, antigos = dias_pend[:dias_atras], dias_pend[dias_atras:]
+    abas = []  # (rótulo, tipo, dado)
+    if conteudo_hoje is not None:
+        abas.append(("📅 Hoje", "hoje", None))
+    for idx in recentes:
+        d = data_do(int(idx))
+        rel = " (ontem)" if d == hoje - datetime.timedelta(days=1) else ""
+        abas.append((f"⏪ {DIAS_ABREV[d.weekday()]} {d:%d/%m}{rel}", "passado", int(idx)))
+    if antigos:
+        abas.append(("⏪ Mais antigos", "antigos", None))
+    for k in range(1, dias_frente + 1):
+        idx = idx_ref + k - (0 if conteudo_hoje is not None else 1)
+        d = data_do(idx)
+        if blocos_do_dia(conn, meta_id, idx).empty:
+            continue
+        rel = {1: "amanhã", 2: "depois de amanhã"}.get((d - hoje).days, "")
+        abas.append((f"⏩ {DIAS_ABREV[d.weekday()]} {d:%d/%m}" + (f" ({rel})" if rel else ""), "futuro", idx))
+    if not abas:
+        st.success("🎉 Nada pendente: você está em dia!")
+        return False
+    if len(dias_pend):
+        st.caption(f"⏪ Há {len(atr)} bloco(s) pendente(s) de dias anteriores: veja nas abas ⏪. "
+                   "Marque o que estudar (com o cronômetro e as questões); o que sobrar continua pendente.")
+    rodando = False
+    for aba, (rotulo, tipo, dado) in zip(st.tabs([r for r, _, _ in abas]), abas):
+        with aba:
+            if tipo == "hoje":
+                rodando = conteudo_hoje() or rodando
+            elif tipo == "passado":
+                sub = atr[atr["idx"] == dado]
+                st.caption(f"{len(sub)} bloco(s) deste dia ainda não concluído(s).")
+                for _, row in sub.iterrows():
+                    rodando = cartao_bloco(conn, row, meta_id) or rodando
+            elif tipo == "antigos":
+                sub = atr[atr["idx"].isin(antigos)]
+                st.caption(f"{len(sub)} bloco(s) de dias mais antigos. Se forem muitos, use '🔁 Fiquei para trás' "
+                           "em 🗓️ Cronograma Semanal para reorganizar o cronograma a partir de hoje.")
+                for _, row in sub.iterrows():
+                    rodando = cartao_bloco(conn, row, meta_id, mostrar_data=True, expandido=False) or rodando
+            else:
+                st.caption("Prévia do que vem por aí. Se sobrar tempo, você pode adiantar um bloco aqui mesmo.")
+                for _, row in blocos_do_dia(conn, meta_id, dado).iterrows():
+                    rodando = cartao_bloco(conn, row, meta_id, expandido=False) or rodando
+    return rodando
 
 # -----------------------------------------------------------------------------
 # NOVO: CARTÃO DE BLOCO (usado nos blocos de hoje e nas pendências do fim de semana)
@@ -1806,24 +1868,11 @@ if menu == "📅 Meta & Rotina do Dia":
                 st.success(f"🏁 O cronograma de {n_semanas} semanas terminou. Boa prova!")
             elif dia_hoje > 4:
                 st.info(f"📆 Hoje é fim de semana (semana {semana_hoje}). Use o tempo livre para repor o que ficou pendente:")
-                df_atr = blocos_atrasados(conn, meta_id_rotina)
-                if df_atr.empty:
-                    st.success("🎉 Nada pendente: você está em dia!")
-                else:
-                    resumo = pd.DataFrame({"Dia": df_atr["nome"].apply(lambda n: n.split(" · ", 1)[0][4:]),
-                                           "Matéria": df_atr["materia"],
-                                           "Tópico": df_atr["nome"].apply(lambda n: n.split(" · ", 1)[-1]),
-                                           "Previsto (min)": df_atr["minutos_planejados"],
-                                           "Status": df_atr["status"]})
-                    st.dataframe(resumo, use_container_width=True, hide_index=True)
-                    st.markdown("**Escolha uma pendência abaixo:** use o cronômetro, registre as questões e conclua. "
-                                "O que você não fizer continua pendente.")
-                    rodando = False
-                    for _, row in df_atr.iterrows():
-                        rodando = cartao_bloco(conn, row, meta_id_rotina, mostrar_data=True, expandido=False) or rodando
-                    if rodando:
-                        time.sleep(1)
-                        st.rerun()
+                _idx_seg = _idx_de_data(inicio_rot, hoje_local())
+                rodando = abas_por_dia(conn, meta_id_rotina, inicio_rot, _idx_seg, hoje_local(), None, dias_frente=1)
+                if rodando:
+                    time.sleep(1)
+                    st.rerun()
             else:
                 idx_hoje = (semana_hoje - 1) * 5 + dia_hoje
                 hoje_iso = hoje_local().isoformat()
@@ -1865,27 +1914,17 @@ if menu == "📅 Meta & Rotina do Dia":
                             except Exception as e:
                                 avisar(f"NÃO foi adiado. Erro: {e}", "error")
                             st.rerun()
-                st.subheader(f"📆 Semana {semana_hoje} · {DIAS_SEMANA[dia_hoje]} – blocos de hoje")
-                df_hoje = pd.read_sql_query("""
-                    SELECT t.id, t.nome, t.bloco, t.minutos_planejados, t.minutos_estudados, t.status, m.nome as materia
-                    FROM topicos t JOIN materias m ON t.materia_id = m.id
-                    WHERE m.meta_id = ? AND t.semana = ? AND t.dia = ?
-                    ORDER BY t.ordem
-                """, conn, params=(int(meta_id_rotina), int(semana_hoje), int(dia_hoje)))
-                if df_hoje.empty:
-                    st.info("Nenhum bloco previsto para hoje." if hoje_iso not in escalas else
-                            "Hoje é dia de escala: sem blocos. Bom serviço!")
-                rodando = False
-                for _, row in df_hoje.iterrows():
-                    rodando = cartao_bloco(conn, row, meta_id_rotina) or rodando
-                # NOVO: pendências de dias anteriores, com o mesmo cartão (fechadas para não poluir)
-                df_atr = blocos_atrasados(conn, meta_id_rotina)
-                if not df_atr.empty:
-                    st.subheader(f"🔁 Pendências atrasadas ({len(df_atr)})")
-                    st.caption("Blocos de dias anteriores que ainda não foram concluídos. Abra um, use o cronômetro, "
-                               "registre as questões e conclua. O que sobrar continua aqui.")
-                    for _, row in df_atr.iterrows():
-                        rodando = cartao_bloco(conn, row, meta_id_rotina, mostrar_data=True, expandido=False) or rodando
+                def _conteudo_hoje():
+                    st.subheader(f"📆 Semana {semana_hoje} · {DIAS_SEMANA[dia_hoje]} – blocos de hoje")
+                    df_hoje = blocos_do_dia(conn, meta_id_rotina, idx_hoje)
+                    if df_hoje.empty:
+                        st.info("Nenhum bloco previsto para hoje." if hoje_iso not in escalas else
+                                "Hoje é dia de escala: sem blocos. Bom serviço!")
+                    r = False
+                    for _, row in df_hoje.iterrows():
+                        r = cartao_bloco(conn, row, meta_id_rotina) or r
+                    return r
+                rodando = abas_por_dia(conn, meta_id_rotina, inicio_rot, idx_hoje, hoje_local(), _conteudo_hoje)
                 if rodando:
                     time.sleep(1)
                     st.rerun()

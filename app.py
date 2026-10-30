@@ -1600,6 +1600,42 @@ def abas_por_dia(conn, meta_id, inicio, idx_ref, hoje, conteudo_hoje=None, dias_
 def _hms(seg):
     return f"{seg // 3600:02d}:{(seg % 3600) // 60:02d}:{seg % 60:02d}"
 
+def mostrar_relogio(seg_restantes, rodando):
+    """Relógio do bloco desenhado no aparelho (JavaScript). Conta sozinho, sem depender do servidor."""
+    import streamlit.components.v1 as components
+    components.html(f"""
+<div id="r" style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#31333F">
+  <div id="aviso" style="display:none;background:#e8f6ec;color:#176b34;padding:8px 10px;border-radius:8px;
+       font-size:14px;margin-bottom:6px">🔔 Tempo previsto do bloco cumprido! O cronômetro continua contando o seu <b>tempo extra</b>.</div>
+  <div style="font-size:30px;font-weight:700"><span id="ic">⏳</span>
+    <code id="t" style="font-size:30px;background:#f0f2f6;padding:2px 8px;border-radius:6px"></code>
+    <small id="ex" style="font-size:14px;font-weight:400"></small></div>
+  <div id="st" style="font-size:13px;color:#666;margin-top:4px"></div>
+</div>
+<script>
+const rodando = {str(bool(rodando)).lower()};
+const fim = Date.now() + ({int(seg_restantes)} * 1000);   // momento em que o bloco termina
+const p = n => String(n).padStart(2, "0");
+const hms = s => p(Math.floor(s / 3600)) + ":" + p(Math.floor(s % 3600 / 60)) + ":" + p(s % 60);
+function desenha() {{
+  const resta = rodando ? Math.floor((fim - Date.now()) / 1000) : {int(seg_restantes)};
+  const extra = resta < 0;
+  document.getElementById("t").textContent = (extra ? "+" : "") + hms(Math.abs(resta));
+  document.getElementById("ic").textContent = extra ? "⏱️" : "⏳";
+  document.getElementById("ex").textContent = extra ? "(tempo extra)" : "";
+  document.getElementById("aviso").style.display = extra ? "block" : "none";
+  document.getElementById("st").textContent = rodando
+    ? "▶️ Contando — pode apagar a tela ou sair da página: o tempo continua."
+    : "⏸️ Parado — toque em ▶️ Iniciar / Continuar.";
+}}
+desenha();
+if (rodando) {{
+  setInterval(desenha, 1000);
+  document.addEventListener("visibilitychange", desenha);  // atualiza na hora em que você volta
+}}
+</script>""", height=130)
+
+
 def cartao_bloco(conn, row, meta_id, mostrar_data=False, expandido=None):
     topico_id = int(row['id'])
     minutos_plan = int(row['minutos_planejados'] or 0)
@@ -1643,15 +1679,13 @@ def cartao_bloco(conn, row, meta_id, mostrar_data=False, expandido=None):
                     else minutos_plan) * 60
         timer_data = get_timer_state(topico_id, base_seg)
         seg_restantes = timer_data['restante']
-        if seg_restantes >= 0:
-            st.markdown(f"### ⏳ `{_hms(seg_restantes)}`")
-        else:
-            extra = -seg_restantes
-            st.success("🔔 Tempo previsto do bloco cumprido! O cronômetro continua contando o seu **tempo extra**.")
-            st.markdown(f"### ⏱️ `+{_hms(extra)}` <small>(tempo extra)</small>", unsafe_allow_html=True)
-            if extra >= 3600:
-                st.warning("⚠️ Já passou 1 hora além do previsto. Se esqueceu o cronômetro ligado, toque em ⏸️ Pausar "
-                           "ou 🔄 Zerar; os minutos também podem ser corrigidos em 🗓️ Cronograma Semanal.")
+        # NOVO (30/10/2026): o relógio da tela roda no próprio celular/computador, calculado a partir
+        # do horário em que o bloco termina (guardado no banco). Assim ele NÃO para quando a tela
+        # apaga, quando você sai da página ou quando a internet cai: ao voltar, mostra o tempo certo.
+        mostrar_relogio(seg_restantes, timer_data['status'] == 'RODANDO')
+        if seg_restantes < 0 and -seg_restantes >= 3600:
+            st.warning("⚠️ Já passou 1 hora além do previsto. Se esqueceu o cronômetro ligado, toque em ⏸️ Pausar "
+                       "ou 🔄 Zerar; os minutos também podem ser corrigidos em 🗓️ Cronograma Semanal.")
         c1, c2, c3 = st.columns(3)
         with c1:
             if st.button("▶️ Iniciar / Continuar", key=f"cr_start_{topico_id}"):
@@ -1870,9 +1904,7 @@ if menu == "📅 Meta & Rotina do Dia":
                 st.info(f"📆 Hoje é fim de semana (semana {semana_hoje}). Use o tempo livre para repor o que ficou pendente:")
                 _idx_seg = _idx_de_data(inicio_rot, hoje_local())
                 rodando = abas_por_dia(conn, meta_id_rotina, inicio_rot, _idx_seg, hoje_local(), None, dias_frente=1)
-                if rodando:
-                    time.sleep(1)
-                    st.rerun()
+                # (o relógio agora conta sozinho no aparelho; não precisa recarregar a página a cada segundo)
             else:
                 idx_hoje = (semana_hoje - 1) * 5 + dia_hoje
                 hoje_iso = hoje_local().isoformat()
@@ -1925,9 +1957,7 @@ if menu == "📅 Meta & Rotina do Dia":
                         r = cartao_bloco(conn, row, meta_id_rotina) or r
                     return r
                 rodando = abas_por_dia(conn, meta_id_rotina, inicio_rot, idx_hoje, hoje_local(), _conteudo_hoje)
-                if rodando:
-                    time.sleep(1)
-                    st.rerun()
+                # (o relógio agora conta sozinho no aparelho; não precisa recarregar a página a cada segundo)
             sincronizar_se_mudou()
             conn.close()
             st.stop()

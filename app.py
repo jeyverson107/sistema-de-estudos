@@ -323,7 +323,8 @@ def init_db():
         "ordem": "INTEGER",               # ordem do bloco dentro do dia
         "bloco": "TEXT",                  # Bloco 1, Bloco 2, Bloco 3
         "minutos_planejados": "INTEGER",  # duração prevista
-        "minutos_estudados": "INTEGER DEFAULT 0"
+        "minutos_estudados": "INTEGER DEFAULT 0",
+        "anotacao": "TEXT"                # NOVO (01/11/2026): onde parei / observação do bloco
     }
     for nome_col, tipo_col in novas_colunas.items():
         if nome_col not in colunas_existentes:
@@ -485,7 +486,7 @@ def set_config(chave, valor):
 # -----------------------------------------------------------------------------
 CRONO_META_NOME = "CFO CBMPE 2027"
 CRONO_INICIO = datetime.date(2026, 10, 12)  # segunda-feira da semana 1
-DIAS_SEMANA = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta"]
+DIAS_SEMANA = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
 
 LEG, CF, ADM, DPM = "Legislação dos Militares de PE", "Direito Constitucional", "Direito Administrativo", "Direito Penal Militar"
 PORT, RED, REV, SIM = "Língua Portuguesa", "Redação", "Revisão", "Simulados"
@@ -669,8 +670,8 @@ def ler_arquivo_cronograma(conteudo_bytes):
             except (KeyError, TypeError, ValueError):
                 erros.append(f"Bloco nº {n}: falta algum campo ou há valor inválido.")
                 continue
-            if semana < 1 or not (0 <= dia <= 4) or minutos <= 0 or not materia or not topico:
-                erros.append(f"Bloco nº {n}: semana, dia (0 a 4), minutos, matéria ou tópico fora do padrão.")
+            if semana < 1 or not (0 <= dia <= 6) or minutos <= 0 or not materia or not topico:
+                erros.append(f"Bloco nº {n}: semana, dia (0 a 6), minutos, matéria ou tópico fora do padrão.")
                 continue
             itens.append((semana, dia, ordem, bloco, minutos, materia, topico))
     if erros:
@@ -1111,17 +1112,17 @@ def gravar_escalas(meta_id, lista):
     set_config(f"escalas_{meta_id}", _json_esc.dumps(sorted(set(lista))))
 
 def deslocar_cronograma(conn, meta_id, a_partir_idx, passo):
-    """Move em 'passo' dias úteis todos os blocos cujo índice (semana-1)*5+dia seja >= a_partir_idx.
+    """Move em 'passo' dias úteis todos os blocos cujo índice (semana-1)*7+dia seja >= a_partir_idx.
     Sábado e domingo não contam: o bloco de sexta vai para a segunda seguinte."""
     inicio = datetime.date.fromisoformat(get_config(f"cronograma_inicio_{meta_id}", CRONO_INICIO.isoformat()))
     linhas = conn.execute("""SELECT t.id, t.nome, t.semana, t.dia FROM topicos t JOIN materias m ON t.materia_id = m.id
                              WHERE m.meta_id = ? AND t.semana IS NOT NULL""", (int(meta_id),)).fetchall()
     movidos = 0
     for tid, nome, sem, dia in linhas:
-        idx = (int(sem) - 1) * 5 + int(dia)
+        idx = (int(sem) - 1) * 7 + int(dia)
         if idx >= a_partir_idx:
-            novo = idx + passo
-            nsem, ndia = novo // 5 + 1, novo % 5
+            novo = _somar_dias_uteis(idx, passo)
+            nsem, ndia = novo // 7 + 1, novo % 7
             conn.execute("UPDATE topicos SET semana = ?, dia = ?, nome = ? WHERE id = ?",
                          (nsem, ndia, nome_topico_crono(nsem, ndia, topico_sem_prefixo(nome), inicio), tid))
             movidos += 1
@@ -1130,9 +1131,9 @@ def deslocar_cronograma(conn, meta_id, a_partir_idx, passo):
 
 def ultima_data_cronograma(conn, meta_id):
     inicio = datetime.date.fromisoformat(get_config(f"cronograma_inicio_{meta_id}", CRONO_INICIO.isoformat()))
-    r = conn.execute("""SELECT MAX((t.semana - 1) * 5 + t.dia) FROM topicos t JOIN materias m ON t.materia_id = m.id
+    r = conn.execute("""SELECT MAX((t.semana - 1) * 7 + t.dia) FROM topicos t JOIN materias m ON t.materia_id = m.id
                         WHERE m.meta_id = ? AND t.semana IS NOT NULL""", (int(meta_id),)).fetchone()[0]
-    return None if r is None else inicio + datetime.timedelta(weeks=r // 5, days=r % 5)
+    return None if r is None else inicio + datetime.timedelta(days=int(r))
 
 # -----------------------------------------------------------------------------
 # NOVO: FIQUEI PARA TRÁS – recomeçar o cronograma a partir de hoje
@@ -1145,10 +1146,18 @@ def ultima_data_cronograma(conn, meta_id):
 MINUTOS_DIA = 240
 
 def _idx_de_data(inicio, data):
-    """Índice do dia útil no cronograma: (semana-1)*5 + dia. Fim de semana vai para a segunda seguinte."""
-    while data.weekday() > 4:
-        data += datetime.timedelta(days=1)
-    return ((data - inicio).days // 7) * 5 + data.weekday()
+    """Índice do dia no cronograma: (semana-1)*7 + dia = dias corridos desde o início (segunda da semana 1).
+    NOVO (01/11/2026): conta todos os dias do calendário, inclusive sábado e domingo (escala 24×72)."""
+    return (data - inicio).days
+
+def _somar_dias_uteis(idx, passo):
+    """Anda 'passo' dias úteis (seg a sex) a partir do índice idx (usado pelo 'dia de escala' antigo)."""
+    d = idx
+    while passo != 0:
+        d += 1 if passo > 0 else -1
+        if d % 7 < 5:
+            passo += -1 if passo > 0 else 1
+    return d
 
 def _bloco_de_revisao(materia, topico):
     t = topico.lower()
@@ -1163,14 +1172,14 @@ def planejar_recomeco(conn, meta_id, data_inicio):
                              FROM topicos t JOIN materias m ON t.materia_id = m.id
                              WHERE m.meta_id = ? AND t.semana IS NOT NULL""", (int(meta_id),)).fetchall()
     concluidos = {topico_sem_prefixo(r[5]) for r in linhas if r[6] == "Concluído"}
-    vagas = sorted({(r[1] - 1) * 5 + r[2] for r in linhas if (r[1] - 1) * 5 + r[2] >= hoje_idx})
+    vagas = sorted({(r[1] - 1) * 7 + r[2] for r in linhas if (r[1] - 1) * 7 + r[2] >= hoje_idx})
     dias = {}
     for r in linhas:
         if r[6] == "Concluído":
             continue
         tid, sem, dia, ordem, materia, nome, status, prev, feito = r
         topico = topico_sem_prefixo(nome)
-        dias.setdefault((sem - 1) * 5 + dia, []).append({
+        dias.setdefault((sem - 1) * 7 + dia, []).append({
             "id": tid, "ordem": ordem, "materia": materia, "topico": topico,
             "resta": max(prev - feito, 0) if status == "Parcial" else prev,
             # bloco dispensável num dia atrasado: caderno de erros/revisão curtos, ou lei seca já feita em outro bloco
@@ -1217,7 +1226,7 @@ def planejar_recomeco(conn, meta_id, data_inicio):
     mover = []
     for u, vaga in zip(unidades, vagas):
         for ordem, x in enumerate(u["blocos"], start=1):
-            mover.append((x["id"], vaga // 5 + 1, vaga % 5, ordem, x["topico"]))
+            mover.append((x["id"], vaga // 7 + 1, vaga % 7, ordem, x["topico"]))
     return {"inicio": inicio, "mover": mover, "descartados": descartados, "cortados_dias": cortados_dias,
             "juntadas": juntadas, "vagas": len(vagas),
             "atrasados": sum(1 for u in unidades if u["atrasado"]) + juntadas}
@@ -1239,10 +1248,210 @@ def aplicar_recomeco(conn, meta_id, data_inicio):
     conn.commit()
     resumo = []
     for u in plano["cortados_dias"]:
-        d = inicio + datetime.timedelta(weeks=u["idx"] // 5, days=u["idx"] % 5)
+        d = inicio + datetime.timedelta(days=int(u["idx"]))
         resumo.append(f"{d:%d/%m}: " + " + ".join(f'{x["materia"]} ({x["topico"]})' for x in u["blocos"]))
     plano["resumo_cortes"] = resumo
     return plano
+
+# -----------------------------------------------------------------------------
+# NOVO (01/11/2026): MINHA ESCALA (24×72 ou 24×48)
+# Cada dia do calendário ganha um tipo, conforme a escala de serviço:
+#   🚓 serviço · 😴 pós-serviço · 📚 livre (+ dias especiais marcados à mão).
+# Cada tipo tem a sua meta de minutos. O cronograma é distribuído pelos dias de
+# verdade (inclusive sábado e domingo), em ordem, sem passar da data final.
+# Com a reorganização automática ligada, o que ficou pendente de dias anteriores é
+# redistribuído sozinho, uma vez por dia, ao abrir o app (sem precisar de botão).
+# -----------------------------------------------------------------------------
+TIPOS_DIA = {"servico": "🚓 Dia de serviço", "pos": "😴 Pós-serviço", "livre": "📚 Dia livre", "folga": "🛌 Sem estudo"}
+ESCALAS = {"24×72": 4, "24×48": 3}
+ESCALA_PADRAO = {"ativa": False, "ref_servico": None, "ciclo": 4, "auto": True, "desde": None, "fim": None,
+                 "min": {"servico": 0, "pos": 90, "livre": 270}, "especiais": {}}
+
+def ler_escala(meta_id):
+    cfg = {**ESCALA_PADRAO, "min": dict(ESCALA_PADRAO["min"]), "especiais": {}}
+    try:
+        salvo = _json_esc.loads(get_config(f"minha_escala_{meta_id}", "{}"))
+        cfg.update({k: v for k, v in salvo.items() if k in cfg})
+        cfg["min"] = {**ESCALA_PADRAO["min"], **salvo.get("min", {})}
+    except Exception:
+        pass
+    if not cfg.get("ref_servico"):
+        cfg["ativa"] = False
+    return cfg
+
+def gravar_escala(meta_id, cfg):
+    set_config(f"minha_escala_{meta_id}", _json_esc.dumps(cfg, ensure_ascii=False))
+
+def escala_ativa(meta_id):
+    return bool(ler_escala(meta_id)["ativa"])
+
+def tipo_do_dia(cfg, data):
+    esp = cfg.get("especiais", {}).get(data.isoformat())
+    if esp in TIPOS_DIA:
+        return esp
+    k = (data - datetime.date.fromisoformat(cfg["ref_servico"])).days % int(cfg.get("ciclo", 4))
+    return "servico" if k == 0 else ("pos" if k == 1 else "livre")
+
+def minutos_do_dia(cfg, data):
+    t = tipo_do_dia(cfg, data)
+    return 0 if t == "folga" else int(cfg["min"].get(t, 0))
+
+def _bloco_leve(materia, topico):
+    """Blocos curtos de fixação, bons para o pós-serviço: revisão, caderno de erros, lei seca, continuação."""
+    return materia == REV or topico.startswith("Lei seca:") or topico.startswith("Continuação:")
+
+def _corte_por_escala(item):
+    """Ordem de corte quando não cabe tudo até a data final (menor = sai primeiro). None = nunca sai."""
+    t, m = item["topico"], item["materia"]
+    if m == SIM or item["feito"] > 0 or item["status"] != "Pendente":
+        return None
+    if t.startswith("Revisão geral"):
+        return 1          # revisões gerais da reta final (as mais antigas primeiro)
+    if m == REV and item["prev"] <= 30 and t.lower().startswith("caderno de erros"):
+        return 2          # caderno de erros de 30 min (a revisão da semana continua)
+    return None
+
+def planejar_pela_escala(conn, meta_id, data_inicio, cfg=None, data_fim=None):
+    """Calcula (sem gravar) a distribuição dos blocos pendentes pelos dias da escala, de data_inicio até a data final."""
+    cfg = cfg or ler_escala(meta_id)
+    if not cfg.get("ref_servico"):
+        return {"erro": "Informe a data de um dia de serviço para o app calcular a sua escala."}
+    inicio = datetime.date.fromisoformat(get_config(f"cronograma_inicio_{meta_id}", CRONO_INICIO.isoformat()))
+    data_inicio = max(data_inicio, inicio)
+    # a data final fica guardada na escala (senão ela "encolheria" a cada reorganização)
+    fim = data_fim or (datetime.date.fromisoformat(cfg["fim"]) if cfg.get("fim") else ultima_data_cronograma(conn, meta_id))
+    if fim is None or fim < data_inicio:
+        return {"erro": "O cronograma já terminou: não há dias para reorganizar."}
+    linhas = conn.execute("""SELECT t.id, t.semana, t.dia, t.ordem, m.nome, t.nome, t.status,
+                                    COALESCE(t.minutos_planejados, 0), COALESCE(t.minutos_estudados, 0)
+                             FROM topicos t JOIN materias m ON t.materia_id = m.id
+                             WHERE m.meta_id = ? AND t.semana IS NOT NULL
+                             ORDER BY t.semana, t.dia, t.ordem""", (int(meta_id),)).fetchall()
+    fila, ocupado_hoje = [], 0
+    hoje_idx = _idx_de_data(inicio, data_inicio)
+    for tid, sem, dia, ordem, materia, nome, status, prev, feito in linhas:
+        idx = (sem - 1) * 7 + dia
+        if status == "Concluído":
+            if idx == hoje_idx:
+                ocupado_hoje += prev   # o que já foi concluído hoje ocupa o tempo de hoje
+            continue
+        resta = max(prev - feito, 15) if status == "Parcial" else prev
+        fila.append({"id": tid, "materia": materia, "topico": topico_sem_prefixo(nome), "status": status,
+                     "prev": prev, "feito": feito, "resta": resta, "idx": idx, "ordem": ordem})
+    fila.sort(key=lambda x: (x["idx"], x["ordem"]))
+    dias = []
+    d = data_inicio
+    while d <= fim:
+        cap = minutos_do_dia(cfg, d) - (ocupado_hoje if d == data_inicio else 0)
+        if cap > 0:
+            dias.append((d, tipo_do_dia(cfg, d), cap))
+        d += datetime.timedelta(days=1)
+    capacidade = sum(c for _, _, c in dias)
+    necessario = sum(x["resta"] for x in fila)
+    # se não cabe, sai primeiro o que é dispensável (revisões gerais e cadernos de erros), sempre com folga de 5%
+    cortes = []
+    for nivel in (1, 2):
+        if necessario <= capacidade * 0.95:
+            break
+        for x in [x for x in fila if _corte_por_escala(x) == nivel]:
+            if necessario <= capacidade * 0.95:
+                break
+            fila.remove(x)
+            cortes.append(x)
+            necessario -= x["resta"]
+    JANELA, TOLERANCIA = 10, 10
+    plano, ultimo_simulado = [], None
+    for d, tipo, cap in dias:
+        if not fila:
+            break
+        usados, escolhidos = 0, []
+        for so_leves in ((True, False) if tipo == "pos" else (False,)):
+            bloqueadas = set()   # a ordem dentro de cada matéria nunca é invertida
+            for x in fila[:JANELA]:
+                if x in escolhidos:
+                    continue
+                livre_materia = x["materia"] == REV or x["materia"] not in bloqueadas
+                cabe = usados + x["resta"] <= cap + TOLERANCIA
+                serve = (not so_leves) or _bloco_leve(x["materia"], x["topico"])
+                if x["materia"] == SIM and ultimo_simulado and (d - ultimo_simulado).days < 7:
+                    serve = False   # simulados com pelo menos 1 semana entre eles
+                if livre_materia and cabe and serve:
+                    escolhidos.append(x)
+                    usados += x["resta"]
+                elif x["materia"] != REV:
+                    bloqueadas.add(x["materia"])
+        if not escolhidos and tipo == "livre" and fila and not (
+                fila[0]["materia"] == SIM and ultimo_simulado and (d - ultimo_simulado).days < 7):
+            escolhidos.append(fila[0])   # bloco maior que o dia livre (ex.: simulado) vai sozinho
+        if any(x["materia"] == SIM for x in escolhidos):
+            ultimo_simulado = d
+        for ordem, x in enumerate(escolhidos, start=1):
+            fila.remove(x)
+            plano.append((x["id"], d, ordem, x["topico"]))
+    por_tipo = {}
+    for _, t, c in dias:
+        por_tipo[t] = por_tipo.get(t, 0) + 1
+    res = {"inicio": inicio, "plano": plano, "cortes": cortes, "capacidade": capacidade,
+           "necessario": necessario, "fim": fim, "por_tipo": por_tipo, "sobra": fila, "dias": len(dias)}
+    if fila:
+        res["erro"] = (f"Não coube tudo até {fim:%d/%m/%Y}: faltam cerca de {sum(x['resta'] for x in fila) / 60:.0f} h "
+                       f"({len(fila)} blocos). Aumente um pouco a meta dos dias livres ou do pós-serviço.")
+    return res
+
+def aplicar_pela_escala(conn, meta_id, data_inicio, cfg=None):
+    plano = planejar_pela_escala(conn, meta_id, data_inicio, cfg)
+    if "erro" in plano:
+        return plano
+    inicio = plano["inicio"]
+    for tid, d, ordem, topico in plano["plano"]:
+        idx = (d - inicio).days
+        sem, dia = idx // 7 + 1, idx % 7
+        conn.execute("UPDATE topicos SET semana = ?, dia = ?, ordem = ?, nome = ? WHERE id = ?",
+                     (sem, dia, ordem, nome_topico_crono(sem, dia, topico, inicio), tid))
+    for x in plano["cortes"]:  # só blocos pendentes, sem questões nem minutos registrados
+        tem_registro = conn.execute("SELECT 1 FROM exercicios WHERE topico_id = ? UNION SELECT 1 FROM sessoes WHERE topico_id = ?",
+                                    (x["id"], x["id"])).fetchone()
+        if not tem_registro:
+            conn.execute("DELETE FROM topicos WHERE id = ? AND status = 'Pendente' AND COALESCE(minutos_estudados, 0) = 0", (x["id"],))
+    conn.commit()
+    return plano
+
+def resumo_cortes_escala(plano):
+    if not plano.get("cortes"):
+        return "nada"
+    n_rev = sum(1 for x in plano["cortes"] if x["topico"].startswith("Revisão geral"))
+    n_cad = len(plano["cortes"]) - n_rev
+    partes = []
+    if n_rev:
+        partes.append(f"{n_rev} bloco(s) de revisão geral da reta final")
+    if n_cad:
+        partes.append(f"{n_cad} caderno(s) de erros de 30 min")
+    return " e ".join(partes)
+
+def reorganizar_automatico(conn, meta_id):
+    """Uma vez por dia: se há blocos pendentes de dias anteriores, redistribui tudo pela escala a partir de hoje."""
+    cfg = ler_escala(meta_id)
+    est = nuvem_estado()
+    if not cfg["ativa"] or not cfg.get("auto", True) or (est["ativa"] and est["status"] != "ok"):
+        return
+    hoje = hoje_local()
+    chave = f"escala_auto_{meta_id}"
+    if get_config(chave, "") == hoje.isoformat():
+        return
+    set_config(chave, hoje.isoformat())
+    atr = blocos_atrasados(conn, meta_id, hoje)
+    if atr.empty:
+        return
+    try:
+        r = aplicar_pela_escala(conn, meta_id, hoje, cfg)
+    except Exception as e:
+        avisar(f"A reorganização automática não foi feita. Erro: {e}", "error")
+        return
+    if "erro" in r:
+        avisar("🔁 " + r["erro"], "warning")
+    else:
+        avisar(f"🔁 {len(atr)} bloco(s) que ficaram pendentes foram redistribuídos sozinhos pela sua escala, "
+               f"a partir de hoje, até {r['fim']:%d/%m}. Retirados para caber: {resumo_cortes_escala(r)}.", "info")
 
 # -----------------------------------------------------------------------------
 # NOVO (22/10/2026): títulos dos blocos mostram tudo o que cobrem + Língua Estrangeira = Espanhol
@@ -1425,7 +1634,7 @@ def analise_desempenho(conn, meta_id, hoje=None, cfg=None):
     bl = pd.read_sql_query("""SELECT m.nome AS materia, t.semana, t.dia, t.status, t.minutos_planejados AS prev
                               FROM topicos t JOIN materias m ON t.materia_id = m.id
                               WHERE m.meta_id = ? AND t.semana IS NOT NULL""", conn, params=(int(meta_id),))
-    bl["idx"] = (bl["semana"] - 1) * 5 + bl["dia"]
+    bl["idx"] = (bl["semana"] - 1) * 7 + bl["dia"]
     corte14 = (hoje - datetime.timedelta(days=14)).isoformat()
     linhas = []
     for materia, q in cfg["questoes"].items():
@@ -1461,10 +1670,10 @@ def ritmo_cronograma(conn, meta_id, hoje=None):
     inicio = datetime.date.fromisoformat(get_config(f"cronograma_inicio_{meta_id}", CRONO_INICIO.isoformat()))
     hoje_idx = _idx_de_data(inicio, hoje)
     r = conn.execute("""SELECT
-            SUM(CASE WHEN (t.semana-1)*5+t.dia < ? AND t.status != 'Concluído' THEN 1 ELSE 0 END),
-            SUM(CASE WHEN (t.semana-1)*5+t.dia < ? AND t.status != 'Concluído'
+            SUM(CASE WHEN (t.semana-1)*7+t.dia < ? AND t.status != 'Concluído' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN (t.semana-1)*7+t.dia < ? AND t.status != 'Concluído'
                      THEN MAX(t.minutos_planejados - COALESCE(t.minutos_estudados,0), 0) ELSE 0 END),
-            SUM(CASE WHEN (t.semana-1)*5+t.dia > ? AND t.status = 'Concluído' THEN 1 ELSE 0 END)
+            SUM(CASE WHEN (t.semana-1)*7+t.dia > ? AND t.status = 'Concluído' THEN 1 ELSE 0 END)
             FROM topicos t JOIN materias m ON t.materia_id = m.id WHERE m.meta_id = ? AND t.semana IS NOT NULL""",
         (hoje_idx, hoje_idx, hoje_idx, int(meta_id))).fetchone()
     return {"atrasados": int(r[0] or 0), "minutos_atrasados": int(r[1] or 0), "adiantados": int(r[2] or 0)}
@@ -1525,26 +1734,26 @@ def blocos_atrasados(conn, meta_id, hoje=None):
     inicio = datetime.date.fromisoformat(get_config(f"cronograma_inicio_{meta_id}", CRONO_INICIO.isoformat()))
     idx = _idx_de_data(inicio, hoje)
     return pd.read_sql_query("""
-        SELECT t.id, t.nome, t.bloco, t.minutos_planejados, t.minutos_estudados, t.status, m.nome as materia,
-               (t.semana - 1) * 5 + t.dia AS idx
+        SELECT t.id, t.nome, t.bloco, t.minutos_planejados, t.minutos_estudados, t.status, m.nome as materia, t.anotacao,
+               (t.semana - 1) * 7 + t.dia AS idx
         FROM topicos t JOIN materias m ON t.materia_id = m.id
-        WHERE m.meta_id = ? AND t.semana IS NOT NULL AND (t.semana - 1) * 5 + t.dia < ? AND t.status != 'Concluído'
+        WHERE m.meta_id = ? AND t.semana IS NOT NULL AND (t.semana - 1) * 7 + t.dia < ? AND t.status != 'Concluído'
         ORDER BY t.semana, t.dia, t.ordem""", conn, params=(int(meta_id), int(idx)))
 
 DIAS_ABREV = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
 
 def blocos_do_dia(conn, meta_id, idx):
     return pd.read_sql_query("""
-        SELECT t.id, t.nome, t.bloco, t.minutos_planejados, t.minutos_estudados, t.status, m.nome as materia
+        SELECT t.id, t.nome, t.bloco, t.minutos_planejados, t.minutos_estudados, t.status, m.nome as materia, t.anotacao
         FROM topicos t JOIN materias m ON t.materia_id = m.id
-        WHERE m.meta_id = ? AND t.semana IS NOT NULL AND (t.semana - 1) * 5 + t.dia = ?
+        WHERE m.meta_id = ? AND t.semana IS NOT NULL AND (t.semana - 1) * 7 + t.dia = ?
         ORDER BY t.ordem""", conn, params=(int(meta_id), int(idx)))
 
 def abas_por_dia(conn, meta_id, inicio, idx_ref, hoje, conteudo_hoje=None, dias_atras=3, dias_frente=2):
     """Abas: (Hoje) + até 3 dias anteriores COM pendência (+ 'Mais antigos') + próximos dias.
     Cada bloco aparece com o cartão completo (cronômetro, questões, concluir). Devolve True se algum cronômetro roda."""
     def data_do(idx):
-        return inicio + datetime.timedelta(weeks=idx // 5, days=idx % 5)
+        return inicio + datetime.timedelta(days=int(idx))
     atr = blocos_atrasados(conn, meta_id, hoje)
     dias_pend = sorted(atr["idx"].unique(), reverse=True) if not atr.empty else []
     recentes, antigos = dias_pend[:dias_atras], dias_pend[dias_atras:]
@@ -1557,13 +1766,19 @@ def abas_por_dia(conn, meta_id, inicio, idx_ref, hoje, conteudo_hoje=None, dias_
         abas.append((f"⏪ {DIAS_ABREV[d.weekday()]} {d:%d/%m}{rel}", "passado", int(idx)))
     if antigos:
         abas.append(("⏪ Mais antigos", "antigos", None))
-    for k in range(1, dias_frente + 1):
+    futuros = []  # NOVO (01/11/2026): pula dias sem blocos (ex.: dia de serviço) e mostra os próximos com estudo
+    for k in range(1, 10):
+        if len(futuros) >= dias_frente:
+            break
         idx = idx_ref + k - (0 if conteudo_hoje is not None else 1)
+        if not blocos_do_dia(conn, meta_id, idx).empty:
+            futuros.append(idx)
+    for idx in futuros:
         d = data_do(idx)
-        if blocos_do_dia(conn, meta_id, idx).empty:
-            continue
         rel = {1: "amanhã", 2: "depois de amanhã"}.get((d - hoje).days, "")
-        abas.append((f"⏩ {DIAS_ABREV[d.weekday()]} {d:%d/%m}" + (f" ({rel})" if rel else ""), "futuro", idx))
+        _cfg_esc = ler_escala(meta_id)
+        _ic = (" " + TIPOS_DIA[tipo_do_dia(_cfg_esc, d)].split()[0]) if _cfg_esc["ativa"] else ""
+        abas.append((f"⏩ {DIAS_ABREV[d.weekday()]} {d:%d/%m}{_ic}" + (f" ({rel})" if rel else ""), "futuro", idx))
     if not abas:
         st.success("🎉 Nada pendente: você está em dia!")
         return False
@@ -1646,6 +1861,10 @@ def cartao_bloco(conn, row, meta_id, mostrar_data=False, expandido=None):
         titulo += f" · {row['nome'].split(' · ', 1)[-1][:60]}"
     with st.expander(titulo, expanded=(row['status'] != "Concluído") if expandido is None else expandido):
         st.markdown(f"**Conteúdo:** {row['nome'].split(' · ', 1)[-1]}")
+        anot = row.get('anotacao') if hasattr(row, 'get') else None
+        anot = anot.strip() if isinstance(anot, str) else ""
+        if anot and row['status'] != "Concluído":
+            st.warning(f"📍 **Onde você parou:** {anot}")
         orientacao = buscar_orientacao(conn, row['materia'], row['nome'])
         if orientacao:
             st.info("📌 **Orientação**\n\n" + orientacao)
@@ -1737,6 +1956,9 @@ def cartao_bloco(conn, row, meta_id, mostrar_data=False, expandido=None):
             st.rerun()
 
         minutos_ja = int(row['minutos_estudados'] or 0)
+        # NOVO (01/11/2026): registrar até onde chegou quando não termina o bloco
+        onde_parei = st.text_input("📍 Onde parei (opcional, ex.: art. 18; página 40; meio do vídeo 3)",
+                                   value=anot, key=f"anot_{topico_id}")
         col_a, col_b = st.columns(2)
         with col_a:
             if st.button("✅ Concluí este bloco", key=f"cr_conc_{topico_id}"):
@@ -1755,13 +1977,136 @@ def cartao_bloco(conn, row, meta_id, mostrar_data=False, expandido=None):
             if st.button("⏳ Fiz só uma parte", key=f"cr_parc_{topico_id}"):
                 txt = _gravar_questoes()
                 if txt is not None:
+                    conn.execute("UPDATE topicos SET anotacao = ? WHERE id = ?", (onde_parei.strip() or None, topico_id))
+                    conn.commit()
                     salvar_status_com_aviso(conn, topico_id, "Parcial", minutos_ja + minutos_cronometrados)
+                    if onde_parei.strip():
+                        st.session_state.setdefault("_avisos", []).append(("success", f"📍 Anotado: {onde_parei.strip()}"))
                     if txt:
                         st.session_state.setdefault("_avisos", []).append(("success", txt.strip()))
                     set_timer_stop(topico_id)
                 st.rerun()
     return timer_data['status'] == 'RODANDO'
 
+
+def _fmt_h(minutos):
+    h, m = divmod(int(minutos), 60)
+    return f"{h}h{m:02d}" if m else f"{h}h"
+
+def painel_escala_hoje(conn, meta_id, cfg):
+    """Cartão no topo da rotina: tipo de hoje, meta do dia, próximos dias e ajuste de imprevistos."""
+    hoje = hoje_local()
+    tipo = tipo_do_dia(cfg, hoje)
+    meta = minutos_do_dia(cfg, hoje)
+    textos = {
+        "servico": "Sem blocos obrigatórios hoje. Se o serviço permitir, faça algumas questões ou leia a lei seca "
+                   "no celular, e registre aqui. Se não der, tudo bem: o plano já conta com isso.",
+        "pos": f"Meta leve de **{_fmt_h(meta)}**. Descanse primeiro; os blocos de hoje são de fixação (revisão, lei seca).",
+        "livre": f"Meta de **{_fmt_h(meta)}**. É o dia do conteúdo novo e mais pesado.",
+        "folga": "Dia marcado como sem estudo. Descanse sem culpa: o plano já conta com isso."}
+    (st.info if tipo in ("servico", "folga") else st.success)(f"**Hoje: {TIPOS_DIA[tipo]}.** {textos[tipo]}")
+    prox = []
+    for k in range(1, 5):
+        d = hoje + datetime.timedelta(days=k)
+        t = tipo_do_dia(cfg, d)
+        prox.append(f"{DIAS_ABREV[d.weekday()]} {d:%d/%m} {TIPOS_DIA[t].split()[0]}"
+                    + (f" {_fmt_h(minutos_do_dia(cfg, d))}" if minutos_do_dia(cfg, d) else ""))
+    st.caption("Próximos dias: " + " · ".join(prox))
+    with st.expander("🚨 Mudou algo? (serviço extra, PJES, prova na faculdade, imprevisto)"):
+        st.write("Diga como fica o dia. O app reorganiza o que vem pela frente sozinho, sem apagar nada do que você já fez.")
+        c1, c2 = st.columns(2)
+        with c1:
+            d_esp = st.date_input("Dia", value=hoje, min_value=hoje, format="DD/MM/YYYY", key="esp_data")
+        with c2:
+            opcoes = list(TIPOS_DIA)
+            t_esp = st.selectbox("Como fica esse dia", opcoes, format_func=lambda t: TIPOS_DIA[t],
+                                 index=opcoes.index(tipo_do_dia(cfg, d_esp)), key="esp_tipo")
+        if st.button("💾 Salvar e reorganizar", key="esp_btn"):
+            novo = {**cfg, "especiais": {**cfg.get("especiais", {}), d_esp.isoformat(): t_esp}}
+            # dias especiais antigos não servem mais para nada: limpa
+            novo["especiais"] = {k: v for k, v in novo["especiais"].items() if k >= hoje.isoformat()}
+            r = planejar_pela_escala(conn, meta_id, hoje, novo)
+            if "erro" in r:
+                avisar("NÃO foi salvo: " + r["erro"], "error")
+            else:
+                gravar_escala(meta_id, novo)
+                aplicar_pela_escala(conn, meta_id, hoje, novo)
+                avisar(f"{d_esp:%d/%m} agora é {TIPOS_DIA[t_esp]}. Cronograma reorganizado a partir de hoje. "
+                       f"Retirados para caber: {resumo_cortes_escala(r)}.")
+            st.rerun()
+
+def tela_config_escala(conn, meta_id):
+    """Configuração da escala (aparece em 🗓️ Cronograma Semanal)."""
+    cfg = ler_escala(meta_id)
+    hoje = hoje_local()
+    titulo = ("🚓 Minha escala de serviço: " + ("LIGADA" if cfg["ativa"] else "desligada"))
+    with st.expander(titulo, expanded=not cfg["ativa"]):
+        st.write("O app distribui o cronograma pelos seus dias de verdade (inclusive sábado e domingo), conforme a escala. "
+                 "Cada tipo de dia tem a sua meta. Assim o plano cabe na sua rotina e você não precisa redimensionar toda semana.")
+        nomes_esc = list(ESCALAS)
+        ciclo_atual = next((n for n in nomes_esc if ESCALAS[n] == int(cfg.get("ciclo", 4))), "24×72")
+        c1, c2 = st.columns(2)
+        with c1:
+            nome_esc = st.selectbox("Escala", nomes_esc, index=nomes_esc.index(ciclo_atual), key="cfg_esc_tipo")
+        with c2:
+            ref_padrao = datetime.date.fromisoformat(cfg["ref_servico"]) if cfg.get("ref_servico") else hoje
+            ref = st.date_input("Data de um dia de serviço (o próximo ou o último)", value=ref_padrao, format="DD/MM/YYYY",
+                                key="cfg_esc_ref")
+        fim_padrao = datetime.date.fromisoformat(cfg["fim"]) if cfg.get("fim") else (ultima_data_cronograma(conn, meta_id) or hoje)
+        fim_esc = st.date_input("Último dia de estudo do cronograma", value=fim_padrao, min_value=hoje,
+                                format="DD/MM/YYYY", key="cfg_esc_fim")
+        st.markdown("**Meta de estudo por tipo de dia** (em horas)")
+        m1, m2, m3 = st.columns(3)
+        with m1:
+            h_serv = st.number_input("🚓 Serviço", 0.0, 4.0, cfg["min"]["servico"] / 60, 0.25, key="cfg_esc_serv",
+                                     help="Recomendado: 0. Questões no celular, se der, são bônus.")
+        with m2:
+            h_pos = st.number_input("😴 Pós-serviço", 0.0, 6.0, cfg["min"]["pos"] / 60, 0.25, key="cfg_esc_pos")
+        with m3:
+            h_livre = st.number_input("📚 Dia livre", 0.5, 10.0, cfg["min"]["livre"] / 60, 0.25, key="cfg_esc_livre")
+        auto = st.checkbox("Reorganizar sozinho, todo dia, o que ficar pendente (sem precisar apertar botão)",
+                           value=bool(cfg.get("auto", True)), key="cfg_esc_auto")
+        novo = {**cfg, "ativa": True, "ciclo": ESCALAS[nome_esc], "ref_servico": ref.isoformat(), "auto": auto,
+                "desde": (cfg.get("desde") if cfg["ativa"] and cfg.get("desde") else hoje.isoformat()),
+                "fim": fim_esc.isoformat(),
+                "min": {"servico": int(round(h_serv * 60)), "pos": int(round(h_pos * 60)), "livre": int(round(h_livre * 60))}}
+        prox = []
+        for k in range(0, 8):
+            d = hoje + datetime.timedelta(days=k)
+            prox.append(f"{DIAS_ABREV[d.weekday()]} {d:%d/%m} {TIPOS_DIA[tipo_do_dia(novo, d)].split()[0]}")
+        st.caption("Como ficam os próximos dias: " + " · ".join(prox))
+        semana_min = sum(minutos_do_dia(novo, hoje + datetime.timedelta(days=k)) for k in range(28)) / 4
+        plano = planejar_pela_escala(conn, meta_id, hoje, novo)
+        if "erro" in plano and "plano" not in plano:
+            st.error(plano["erro"])
+        else:
+            k1, k2, k3 = st.columns(3)
+            k1.metric("Média por semana", _fmt_h(semana_min))
+            k2.metric("Tempo disponível até o fim", f"{plano['capacidade'] / 60:.0f} h")
+            k3.metric("Tempo que falta estudar", f"{plano['necessario'] / 60:.0f} h")
+            if "erro" in plano:
+                st.error(plano["erro"])
+            elif plano["cortes"]:
+                st.warning(f"Para caber até {plano['fim']:%d/%m/%Y}, sairiam: {resumo_cortes_escala(plano)}. "
+                           "Conteúdo novo, simulados e lei seca nunca são cortados. "
+                           "Se quiser manter tudo, aumente um pouco a meta dos dias livres.")
+            else:
+                st.success(f"Cabe tudo até {plano['fim']:%d/%m/%Y}, sem cortar nada.")
+        if st.button("💾 Salvar escala e reorganizar a partir de hoje", type="primary", key="cfg_esc_btn",
+                     disabled=("erro" in plano)):
+            try:
+                gravar_escala(meta_id, novo)
+                r = aplicar_pela_escala(conn, meta_id, hoje, novo)
+                set_config(f"escala_auto_{meta_id}", hoje.isoformat())
+                avisar(f"Escala salva e cronograma reorganizado: {len(r['plano'])} blocos distribuídos de hoje até "
+                       f"{r['fim']:%d/%m/%Y}. Retirados para caber: {resumo_cortes_escala(r)}.")
+            except Exception as e:
+                avisar(f"NÃO foi salvo. Erro: {e}", "error")
+            st.rerun()
+        if cfg["ativa"] and st.button("Desligar a escala (voltar ao modo segunda a sexta)", key="cfg_esc_off"):
+            gravar_escala(meta_id, {**cfg, "ativa": False})
+            avisar("Escala desligada. Os blocos continuam nos dias em que estão; use '🔁 Fiquei para trás' se precisar.", "info")
+            st.rerun()
 
 menu = st.sidebar.radio("Navegação", [
     "📅 Meta & Rotina do Dia",
@@ -1868,6 +2213,66 @@ def preencher_sessoes_antigas(conn):
     conn.commit()
     set_config("sessoes_preenchidas", "sim")
 
+def ajuste_progresso_2026_11_01(conn):
+    """Pedido em 01/11/2026: registrar o que já foi estudado e ligar a escala 24×72 (serviço em 03/11/2026).
+    - Código Disciplinar: estudado por inteiro (falta revisar) → blocos de conteúdo concluídos; lei seca fica para revisão.
+    - Estatuto: parou no art. 18 → próximo bloco do Estatuto fica 'Parcial' com a anotação.
+    - Direito Administrativo: noções iniciais em andamento → anotação no bloco.
+    Roda uma vez só, só na conta do dono e só depois de ler a nuvem."""
+    chave = "ajuste_progresso_2026_11_01"
+    est = nuvem_estado()
+    if get_config(chave, "") or (est["ativa"] and est["status"] != "ok"):
+        return
+    if _usuario() and not _usuario().get("admin"):
+        set_config(chave, "pulado (não é o dono)")
+        return
+    meta = conn.execute("SELECT id FROM metas WHERE nome = ?", (CRONO_META_NOME,)).fetchone()
+    if not meta:
+        set_config(chave, "pulado (sem cronograma CFO)")
+        return
+    mid = meta[0]
+    linhas = conn.execute("""SELECT t.id, t.nome, t.status FROM topicos t JOIN materias m ON t.materia_id = m.id
+                             WHERE m.meta_id = ? AND t.semana IS NOT NULL ORDER BY t.semana, t.dia, t.ordem""", (mid,)).fetchall()
+    n_cod = 0
+    for tid, nome, status in linhas:
+        top = topico_sem_prefixo(nome)
+        if "Cód. Disciplinar" in top and not top.startswith("Lei seca:") and "2ª passada" not in top and status != "Concluído":
+            salvar_status_topico(conn, tid, "Concluído")
+            n_cod += 1
+    for tid, nome, status in linhas:
+        top = topico_sem_prefixo(nome)
+        if top.startswith("Estatuto") and status != "Concluído":
+            conn.execute("UPDATE topicos SET status = CASE WHEN status = 'Pendente' THEN 'Parcial' ELSE status END, "
+                         "teoria = 1, anotacao = ? WHERE id = ?",
+                         ("Você parou no art. 18 do Estatuto (Lei 6.783): continue a partir do art. 19.", tid))
+            break
+    for tid, nome, status in linhas:
+        if topico_sem_prefixo(nome).startswith("Estado, governo e administração") and status != "Concluído":
+            conn.execute("UPDATE topicos SET status = CASE WHEN status = 'Pendente' THEN 'Parcial' ELSE status END, "
+                         "teoria = 1, anotacao = ? WHERE id = ?",
+                         ("Noções iniciais em andamento (Estado, governo, conceito de Direito Administrativo): "
+                          "continue daí e siga para as fontes.", tid))
+            break
+    conn.commit()
+    hoje = hoje_local()
+    cfg = ler_escala(mid)
+    if not cfg["ativa"]:
+        cfg = {**cfg, "ativa": True, "ciclo": 4, "ref_servico": "2026-11-03", "auto": True, "desde": hoje.isoformat(),
+               "fim": "2027-02-26",  # sexta antes da prova (domingo, 28/02/2027)
+               "min": {"servico": 0, "pos": 90, "livre": 300}}
+        gravar_escala(mid, cfg)
+    r = aplicar_pela_escala(conn, mid, max(hoje, datetime.date(2026, 11, 2)), cfg)
+    set_config(f"escala_auto_{mid}", hoje.isoformat())
+    if "erro" in r:
+        set_config(chave, "feito com aviso: " + r["erro"])
+        avisar("Progresso registrado e escala 24×72 ligada, mas: " + r["erro"], "warning")
+        return
+    set_config(chave, f"feito em {hoje:%d/%m/%Y}")
+    avisar(f"✅ Progresso registrado: {n_cod} blocos do Código Disciplinar concluídos (a lei seca ficou para a revisão), "
+           f"Estatuto marcado a partir do art. 19 e Direito Administrativo em andamento. 🚓 Escala 24×72 ligada "
+           f"(serviço em 03/11): o cronograma foi distribuído pelos seus dias reais até {r['fim']:%d/%m/%Y}. "
+           f"Retirados para caber: {resumo_cortes_escala(r)}.", "info")
+
 conn = get_db()
 preencher_sessoes_antigas(conn)
 if nuvem_estado()['status'] == 'vazia':
@@ -1875,6 +2280,10 @@ if nuvem_estado()['status'] == 'vazia':
 ajuste_estatuto_14_10(conn)
 recomeco_automatico_20_10(conn)
 ajuste_titulos_2026_10_22(conn)
+ajuste_progresso_2026_11_01(conn)
+for (_mid_esc,) in conn.execute("SELECT id FROM metas WHERE ativa = 1").fetchall():
+    reorganizar_automatico(conn, _mid_esc)
+mostrar_avisos()  # mostra já os avisos dos ajustes automáticos acima
 sincronizar_se_mudou()
 
 # =============================================================================
@@ -1900,16 +2309,19 @@ if menu == "📅 Meta & Rotina do Dia":
                 st.info(f"📆 O cronograma começa na segunda-feira, {inicio_rot:%d/%m/%Y}.")
             elif semana_hoje > n_semanas:
                 st.success(f"🏁 O cronograma de {n_semanas} semanas terminou. Boa prova!")
-            elif dia_hoje > 4:
+            elif dia_hoje > 4 and not escala_ativa(meta_id_rotina):
                 st.info(f"📆 Hoje é fim de semana (semana {semana_hoje}). Use o tempo livre para repor o que ficou pendente:")
                 _idx_seg = _idx_de_data(inicio_rot, hoje_local())
                 rodando = abas_por_dia(conn, meta_id_rotina, inicio_rot, _idx_seg, hoje_local(), None, dias_frente=1)
                 # (o relógio agora conta sozinho no aparelho; não precisa recarregar a página a cada segundo)
             else:
-                idx_hoje = (semana_hoje - 1) * 5 + dia_hoje
+                idx_hoje = (semana_hoje - 1) * 7 + dia_hoje
                 hoje_iso = hoje_local().isoformat()
                 escalas = ler_escalas(meta_id_rotina)
-                if hoje_iso in escalas:
+                cfg_esc_rot = ler_escala(meta_id_rotina)
+                if cfg_esc_rot["ativa"]:
+                    painel_escala_hoje(conn, meta_id_rotina, cfg_esc_rot)
+                elif hoje_iso in escalas:
                     st.warning("🚨 **Hoje está marcado como dia de escala.** Todo o cronograma foi adiado 1 dia útil: "
                                "o que era de hoje passou para amanhã, o de amanhã para depois, e assim por diante.")
                     if st.button("↩️ Desfazer: não estou mais escalado hoje", key="esc_desfazer"):
@@ -1933,7 +2345,7 @@ if menu == "📅 Meta & Rotina do Dia":
                                 n = deslocar_cronograma(conn, meta_id_rotina, idx_hoje, 1)
                                 gravar_escalas(meta_id_rotina, escalas + [hoje_iso])
                                 restam = conn.execute("""SELECT COUNT(*) FROM topicos t JOIN materias m ON t.materia_id = m.id
-                                    WHERE m.meta_id = ? AND (t.semana - 1) * 5 + t.dia = ?""", (int(meta_id_rotina), idx_hoje)).fetchone()[0]
+                                    WHERE m.meta_id = ? AND (t.semana - 1) * 7 + t.dia = ?""", (int(meta_id_rotina), idx_hoje)).fetchone()[0]
                                 fim = ultima_data_cronograma(conn, meta_id_rotina)
                                 if restam == 0:
                                     msg = (f"Cronograma adiado 1 dia e conferido: {n} blocos foram para frente. "
@@ -1950,8 +2362,13 @@ if menu == "📅 Meta & Rotina do Dia":
                     st.subheader(f"📆 Semana {semana_hoje} · {DIAS_SEMANA[dia_hoje]} – blocos de hoje")
                     df_hoje = blocos_do_dia(conn, meta_id_rotina, idx_hoje)
                     if df_hoje.empty:
-                        st.info("Nenhum bloco previsto para hoje." if hoje_iso not in escalas else
-                                "Hoje é dia de escala: sem blocos. Bom serviço!")
+                        if cfg_esc_rot["ativa"]:
+                            st.info({"servico": "Hoje é dia de serviço: sem blocos. Bom serviço! Os próximos estão nas abas ⏩.",
+                                     "folga": "Hoje está marcado como dia sem estudo. Descanse."}.get(
+                                        tipo_do_dia(cfg_esc_rot, hoje_local()), "Nenhum bloco previsto para hoje."))
+                        else:
+                            st.info("Nenhum bloco previsto para hoje." if hoje_iso not in escalas else
+                                    "Hoje é dia de escala: sem blocos. Bom serviço!")
                     r = False
                     for _, row in df_hoje.iterrows():
                         r = cartao_bloco(conn, row, meta_id_rotina) or r
@@ -2112,7 +2529,9 @@ elif menu == "🗓️ Cronograma Semanal":
         semana_padrao = min(max(semana_hoje, 1), n_semanas_cr)
         inicio_cr = datetime.date.fromisoformat(get_config(f"cronograma_inicio_{meta_id_cr}", CRONO_INICIO.isoformat()))
 
-        with st.expander("🔁 Fiquei para trás: recomeçar o cronograma a partir de hoje"):
+        tela_config_escala(conn, meta_id_cr)
+        if not escala_ativa(meta_id_cr):
+          with st.expander("🔁 Fiquei para trás: recomeçar o cronograma a partir de hoje"):
             st.write("O que você já concluiu fica onde está. Tudo o que está pendente (inclusive o atrasado) é "
                      "reorganizado em ordem a partir de hoje, **sem passar da data final**. Para caber, sobras de dias "
                      "atrasados são juntadas (até 4 h por dia) e, se ainda faltar espaço, saem os dias de **revisão geral** "
@@ -2135,7 +2554,7 @@ elif menu == "🗓️ Cronograma Semanal":
 
         def rotulo_semana(s):
             ini = inicio_cr + datetime.timedelta(weeks=s - 1)
-            fim = ini + datetime.timedelta(days=4)
+            fim = ini + datetime.timedelta(days=6)
             return f"Semana {s} ({ini:%d/%m} a {fim:%d/%m})" + ("  ← atual" if s == semana_hoje else "")
 
         semana_sel = st.selectbox("Semana:", list(range(1, n_semanas_cr + 1)), index=semana_padrao - 1, format_func=rotulo_semana)
@@ -2610,8 +3029,8 @@ elif menu == "📊 Dashboard de Evolução":
         # posição de hoje no cronograma (índice de dia útil)
         dias_desde = (hoje - inicio).days
         sem_hoje = dias_desde // 7
-        idx_hoje = sem_hoje * 5 + min(hoje.weekday(), 5)  # no fim de semana, a semana inteira já "passou"
-        bl['idx'] = (bl['semana'] - 1) * 5 + bl['dia']
+        idx_hoje = dias_desde  # NOVO (01/11/2026): índice = dias corridos desde o início
+        bl['idx'] = (bl['semana'] - 1) * 7 + bl['dia']
         vencidos = bl[bl['idx'] < idx_hoje]
         atrasados = vencidos[vencidos['status'] != 'Concluído']
 
@@ -2621,6 +3040,16 @@ elif menu == "📊 Dashboard de Evolução":
         esc_semana = sum(1 for d in escalas if seg <= datetime.date.fromisoformat(d) < seg + datetime.timedelta(days=5))
         meta_semana_h = max(0.0, meta_h * (5 - esc_semana) / 5)
         dias_uteis_passados = min(hoje.weekday() + 1, 5)
+        cfg_esc_dash = ler_escala(m_id)
+        if cfg_esc_dash["ativa"]:  # NOVO (01/11/2026): a meta da semana vem da escala (seg a dom)
+            _desde = cfg_esc_dash.get("desde") or seg.isoformat()
+            def _meta_dia(d):  # antes de ligar a escala, vale a meta antiga (seg a sex)
+                if d.isoformat() >= _desde:
+                    return minutos_do_dia(cfg_esc_dash, d)
+                return 0 if d.weekday() > 4 or d.isoformat() in escalas else meta_h * 60 / 5
+            esc_semana = 0
+            meta_semana_h = sum(_meta_dia(seg + datetime.timedelta(days=k)) for k in range(7)) / 60
+            _ate_hoje_h = sum(_meta_dia(seg + datetime.timedelta(days=k)) for k in range(hoje.weekday() + 1)) / 60
 
         def acerto(df):
             t = int(df['total'].sum()) if not df.empty else 0
@@ -2631,10 +3060,12 @@ elif menu == "📊 Dashboard de Evolução":
         # ---------------- 1. alertas ----------------
         alertas = []
         if len(atrasados):
-            alertas.append(("warning", f"**{len(atrasados)} bloco(s) atrasado(s)** até ontem. Reponha no fim de semana "
-                                       f"(lista em 🗓️ Cronograma Semanal)."))
+            alertas.append(("warning", f"**{len(atrasados)} bloco(s) atrasado(s)** até ontem. " + ("Com a escala ligada, o app redistribui sozinho ao abrir a rotina."
+                                       if cfg_esc_dash["ativa"] else "Reponha no fim de semana (lista em 🗓️ Cronograma Semanal).")))
         esperado = meta_semana_h * min(dias_uteis_passados, 5) / 5
-        if hoje.weekday() < 5 and esperado > 0 and min_semana / 60 < 0.7 * esperado:
+        if cfg_esc_dash["ativa"]:
+            esperado = _ate_hoje_h
+        if (hoje.weekday() < 5 or cfg_esc_dash["ativa"]) and esperado > 0 and min_semana / 60 < 0.7 * esperado:
             alertas.append(("warning", f"**Horas abaixo do ritmo:** {min_semana / 60:.1f} h nesta semana; "
                                        f"o esperado até hoje era {esperado:.1f} h."))
         if not ex.empty:
@@ -2709,7 +3140,8 @@ elif menu == "📊 Dashboard de Evolução":
         cal = pd.DataFrame([{
             "data": d.strftime("%d/%m"), "semana": d - datetime.timedelta(days=d.weekday()),
             "dia": nomes_dia[d.weekday()], "minutos": int(min_dia.get(d, 0)), "questoes": int(q_dia.get(d, 0)),
-            "tipo": "Escala" if d.isoformat() in escalas else ("Estudou" if min_dia.get(d, 0) > 0 or q_dia.get(d, 0) > 0
+            "tipo": "Escala" if (d.isoformat() in escalas or (cfg_esc_dash["ativa"] and minutos_do_dia(cfg_esc_dash, d) == 0
+                                                              and d.isoformat() >= (cfg_esc_dash.get("desde") or "9999"))) else ("Estudou" if min_dia.get(d, 0) > 0 or q_dia.get(d, 0) > 0
                                                              else "Sem registro")} for d in dias])
         # grade de quadrados (HTML simples: fica igual no celular e no computador)
         def cor_dia(row):
@@ -2745,6 +3177,10 @@ elif menu == "📊 Dashboard de Evolução":
                    f'<span style="{celula};background:#5f6368;vertical-align:middle"></span> escala</div>')
         st.markdown("".join(html) + legenda, unsafe_allow_html=True)
         dias_uteis = [d for d in dias if d.weekday() < 5 and d <= hoje and d >= inicio and d.isoformat() not in escalas]
+        if cfg_esc_dash["ativa"]:  # com escala: contam os dias com meta (o antes da escala segue seg a sex)
+            _ini_esc = datetime.date.fromisoformat(cfg_esc_dash.get("desde") or hoje.isoformat())
+            dias_uteis = [d for d in dias if d >= inicio and d <= hoje and d.isoformat() not in escalas and
+                          ((d >= _ini_esc and minutos_do_dia(cfg_esc_dash, d) > 0) or (d < _ini_esc and d.weekday() < 5))]
         dias_ok = sum(1 for d in dias_uteis if min_dia.get(d, 0) > 0 or q_dia.get(d, 0) > 0)
         st.caption(f"Quanto mais escuro, mais tempo estudado. Dias úteis com estudo registrado: **{dias_ok} de {len(dias_uteis)}** "
                    f"(dias de escala não contam).")

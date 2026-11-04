@@ -1428,6 +1428,84 @@ def resumo_cortes_escala(plano):
         partes.append(f"{n_cad} caderno(s) de erros de 30 min")
     return " e ".join(partes)
 
+# NOVO (03/11/2026): proteções da reorganização automática
+DATA_PROVA_CFO = datetime.date(2027, 2, 28)
+
+def _foto_cronograma(conn, meta_id):
+    """Guarda a posição de todos os blocos (e os blocos inteiros) para poder desfazer a reorganização do dia."""
+    cols = [c[1] for c in conn.execute("PRAGMA table_info(topicos)").fetchall()]
+    linhas = conn.execute(f"SELECT {', '.join('t.' + c for c in cols)} FROM topicos t JOIN materias m ON t.materia_id = m.id "
+                          "WHERE m.meta_id = ?", (int(meta_id),)).fetchall()
+    set_config(f"desfazer_auto_{meta_id}", _json_esc.dumps(
+        {"data": hoje_local().isoformat(), "cols": cols, "linhas": [list(l) for l in linhas]}, ensure_ascii=False))
+
+def desfazer_disponivel(meta_id):
+    try:
+        foto = _json_esc.loads(get_config(f"desfazer_auto_{meta_id}", "{}"))
+        return foto if foto.get("data") == hoje_local().isoformat() else None
+    except Exception:
+        return None
+
+def desfazer_reorganizacao(conn, meta_id):
+    """Volta os blocos para as datas de antes da reorganização de hoje e devolve os blocos retirados.
+    O que você estudou e marcou depois disso (status, minutos, questões) é mantido."""
+    foto = desfazer_disponivel(meta_id)
+    if not foto:
+        return 0
+    cols = foto["cols"]
+    i = {c: k for k, c in enumerate(cols)}
+    existentes = {r[0] for r in conn.execute("SELECT t.id FROM topicos t JOIN materias m ON t.materia_id = m.id "
+                                             "WHERE m.meta_id = ?", (int(meta_id),))}
+    n = 0
+    for l in foto["linhas"]:
+        if l[i["id"]] in existentes:
+            conn.execute("UPDATE topicos SET semana = ?, dia = ?, ordem = ?, nome = ? WHERE id = ?",
+                         (l[i["semana"]], l[i["dia"]], l[i["ordem"]], l[i["nome"]], l[i["id"]]))
+        else:
+            conn.execute(f"INSERT INTO topicos ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})", l)
+        n += 1
+    conn.commit()
+    set_config(f"desfazer_auto_{meta_id}", "{}")
+    return n
+
+def _eh_conteudo_novo(materia, topico):
+    return materia not in (REV, SIM, RED) and not topico.startswith(
+        ("Revisão", "Só lei seca", "Exatas mistas", "Questões AOCP e revisão"))
+
+def dias_revisao_final(conn, meta_id):
+    """(dias só de revisão/simulado depois do último conteúdo novo, data do último conteúdo novo, data final)."""
+    inicio = datetime.date.fromisoformat(get_config(f"cronograma_inicio_{meta_id}", CRONO_INICIO.isoformat()))
+    linhas = conn.execute("""SELECT t.semana, t.dia, m.nome, t.nome FROM topicos t JOIN materias m ON t.materia_id = m.id
+                             WHERE m.meta_id = ? AND t.semana IS NOT NULL""", (int(meta_id),)).fetchall()
+    if not linhas:
+        return None
+    passo = 7 if escala_ativa(meta_id) else 5
+    def data(sem, dia):
+        idx = (sem - 1) * passo + dia
+        return inicio + (datetime.timedelta(days=idx) if passo == 7 else datetime.timedelta(weeks=idx // 5, days=idx % 5))
+    conteudo = [data(s, d) for s, d, m, n in linhas if _eh_conteudo_novo(m, topico_sem_prefixo(n))]
+    if not conteudo:
+        return None
+    ult = max(conteudo)
+    fim = max(data(s, d) for s, d, _, _ in linhas)
+    n = len({data(s, d) for s, d, _, _ in linhas if data(s, d) > ult})
+    return n, ult, fim
+
+def texto_revisao_final(conn, meta_id):
+    r = dias_revisao_final(conn, meta_id)
+    if not r:
+        return "", "ok"
+    n, ult, fim = r
+    nivel = "ok" if n >= 8 else ("atencao" if n >= 5 else "critico")
+    txt = (f"Revisão final: **{n} dia(s)** só de revisão e simulados (o conteúdo novo termina em {ult:%d/%m}; "
+           f"o cronograma vai até {fim:%d/%m}).")
+    if nivel == "atencao":
+        txt += " ⚠️ Está ficando curta: evite perder mais dias e use as folgas para repor."
+    elif nivel == "critico":
+        txt += (" 🔴 Muito curta: o ritmo não está sustentável. Aumente a meta dos dias livres ou do pós-serviço "
+                "em 🗓️ Cronograma Semanal → Minha escala, ou reponha nas folgas.")
+    return txt, nivel
+
 def reorganizar_automatico(conn, meta_id):
     """Uma vez por dia: se há blocos pendentes de dias anteriores, redistribui tudo pela escala a partir de hoje."""
     cfg = ler_escala(meta_id)
@@ -1443,6 +1521,7 @@ def reorganizar_automatico(conn, meta_id):
     if atr.empty:
         return
     try:
+        _foto_cronograma(conn, meta_id)   # para o botão ↩️ Desfazer (vale só hoje)
         r = aplicar_pela_escala(conn, meta_id, hoje, cfg)
     except Exception as e:
         avisar(f"A reorganização automática não foi feita. Erro: {e}", "error")
@@ -1450,8 +1529,11 @@ def reorganizar_automatico(conn, meta_id):
     if "erro" in r:
         avisar("🔁 " + r["erro"], "warning")
     else:
+        rev_txt, nivel = texto_revisao_final(conn, meta_id)
         avisar(f"🔁 {len(atr)} bloco(s) que ficaram pendentes foram redistribuídos sozinhos pela sua escala, "
-               f"a partir de hoje, até {r['fim']:%d/%m}. Retirados para caber: {resumo_cortes_escala(r)}.", "info")
+               f"a partir de hoje, até {r['fim']:%d/%m}. Retirados para caber: {resumo_cortes_escala(r)}. "
+               + rev_txt.replace("**", "") + " Se você estudou e esqueceu de marcar, use ↩️ Desfazer no topo do dia.",
+               "info" if nivel == "ok" else "warning")
 
 # -----------------------------------------------------------------------------
 # NOVO (22/10/2026): títulos dos blocos mostram tudo o que cobrem + Língua Estrangeira = Espanhol
@@ -2005,6 +2087,40 @@ def painel_escala_hoje(conn, meta_id, cfg):
         "livre": f"Meta de **{_fmt_h(meta)}**. É o dia do conteúdo novo e mais pesado.",
         "folga": "Dia marcado como sem estudo. Descanse sem culpa: o plano já conta com isso."}
     (st.info if tipo in ("servico", "folga") else st.success)(f"**Hoje: {TIPOS_DIA[tipo]}.** {textos[tipo]}")
+    # ↩️ desfazer a reorganização automática de hoje
+    if desfazer_disponivel(meta_id):
+        with st.container(border=True):
+            st.write("🔁 **O app reorganizou o cronograma hoje** com o que tinha ficado pendente. "
+                     "Se você estudou e só esqueceu de marcar, desfaça, marque nas abas ⏪ o que estudou e reorganize de novo.")
+            if st.button("↩️ Desfazer a reorganização de hoje", key="desf_auto"):
+                try:
+                    n = desfazer_reorganizacao(conn, meta_id)
+                    avisar(f"Desfeito: {n} blocos voltaram para as datas de antes. Marque o que estudou nas abas ⏪ "
+                           "e depois toque em 🔁 Reorganizar agora.")
+                except Exception as e:
+                    avisar(f"NÃO foi desfeito. Erro: {e}", "error")
+                st.rerun()
+    if blocos_atrasados(conn, meta_id, hoje).shape[0] and not desfazer_disponivel(meta_id):
+        if st.button("🔁 Reorganizar agora (depois de marcar o que estudou)", key="reorg_agora"):
+            try:
+                _foto_cronograma(conn, meta_id)
+                r = aplicar_pela_escala(conn, meta_id, hoje, cfg)
+                avisar(("Cronograma reorganizado a partir de hoje. Retirados para caber: " + resumo_cortes_escala(r) + ".")
+                       if "erro" not in r else "🔁 " + r["erro"], "success" if "erro" not in r else "warning")
+            except Exception as e:
+                avisar(f"NÃO foi reorganizado. Erro: {e}", "error")
+            st.rerun()
+    # 📉 alarme da revisão final
+    rev_txt, nivel = texto_revisao_final(conn, meta_id)
+    if rev_txt:
+        {"ok": st.caption, "atencao": st.warning, "critico": st.error}[nivel](("📉 " if nivel != "ok" else "📘 ") + rev_txt)
+    # ⚠️ plantão na véspera da prova (só no CFO)
+    if conn.execute("SELECT 1 FROM metas WHERE id = ? AND nome = ?", (int(meta_id), CRONO_META_NOME)).fetchone():
+        vespera = DATA_PROVA_CFO - datetime.timedelta(days=1)
+        if tipo_do_dia(cfg, vespera) == "servico" and hoje <= vespera:
+            st.warning(f"⚠️ Pela sua escala, o plantão cai em **{vespera:%d/%m} (véspera da prova)** e você sairia às 7h do "
+                       f"dia da prova ({DATA_PROVA_CFO:%d/%m}). Vale pedir troca ou dispensa com antecedência. Se conseguir, "
+                       "marque o dia em '🚨 Mudou algo?' abaixo.")
     prox = []
     for k in range(1, 5):
         d = hoje + datetime.timedelta(days=k)

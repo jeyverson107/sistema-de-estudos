@@ -1,0 +1,679 @@
+{
+ "versao": 1,
+ "instrucoes": [
+  "Mínimo de 15 e máximo de 20 linhas (item 12.6 do edital): o que passar de 20 é desconsiderado.",
+  "Tipologia: dissertação (texto dissertativo-argumentativo), com ponto de vista e argumentos.",
+  "Escreva à mão, de caneta azul ou preta, sem nenhuma marca de identificação.",
+  "Tempo sugerido: 1 hora, cronometrada (planejamento 10 min, rascunho 30 min, passar a limpo 20 min).",
+  "Critérios (cargo de Oficial, 30 pontos): tema e argumentação 8 · coesão e coerência 8 · estrutura 7 · gramática 7. Mínimo para não ser eliminado: 9."
+ ],
+ "aviso": "Os textos motivadores das propostas inéditas foram elaborados para treino. As leis citadas são reais; não há números ou citações atribuídos a fontes que não existam.",
+ "propostas": [
+  {
+   "id": 1,
+   "tipo": "real",
+   "tema": "Desafios para a promoção do turismo sustentável no Brasil",
+   "fonte": "Instituto AOCP – PMPE, Soldado (2024)",
+   "link": "https://arquivos.qconcursos.com/prova/arquivo_prova/155091/instituto-aocp-2024-pm-pe-soldado-da-policia-militar-prova.pdf",
+   "comando": "A partir da leitura dos textos motivadores e com base nos seus conhecimentos, redija um texto dissertativo-argumentativo, em modalidade escrita formal da língua portuguesa, sobre o tema: “Desafios para a promoção do turismo sustentável no Brasil”. Apresente um ponto de vista e argumentos que o sustentem, sem copiar os textos motivadores.",
+   "resumo_textos": "Três textos de órgãos oficiais: a definição de turismo sustentável (Ministério do Turismo), os pilares eficiência econômica, justiça social e prudência ecológica em contraste com o turismo predatório (ICMBio) e uma notícia da Embratur (2023) sobre a sustentabilidade como estratégia para o país.",
+   "textos": [],
+   "dicas": [
+    "Tese possível: o turismo só é sustentável quando gera renda local sem destruir o patrimônio natural e cultural.",
+    "Argumentos: planejamento e fiscalização do poder público; educação ambiental do visitante e da comunidade.",
+    "Evite só elogiar o turismo: o tema pede DESAFIOS."
+   ]
+  },
+  {
+   "id": 2,
+   "tipo": "real",
+   "tema": "A importância da valorização da saúde mental no ambiente de trabalho",
+   "fonte": "Instituto AOCP – PMES, Soldado Combatente (2022)",
+   "link": "https://cdn.direcaoconcursos.com.br/uploads/2023/03/Prova-discursiva_PM-ES.pdf",
+   "comando": "A partir da leitura dos textos motivadores e com base nos seus conhecimentos, redija um texto dissertativo-argumentativo, em modalidade escrita formal da língua portuguesa, sobre o tema: “A importância da valorização da saúde mental no ambiente de trabalho”. Apresente um ponto de vista e argumentos que o sustentem, sem copiar os textos motivadores.",
+   "resumo_textos": "O conceito de saúde mental da OMS, a descrição de um ambiente de trabalho saudável segundo a OMS e o relato de uma jovem que adoeceu sob uma chefia abusiva.",
+   "textos": [],
+   "dicas": [
+    "Tese possível: cuidar da saúde mental do trabalhador é condição para produtividade e dignidade, não um favor.",
+    "Argumentos: liderança respeitosa e prevenção ao assédio; acesso a apoio psicológico e equilíbrio entre trabalho e vida.",
+    "Na prova original o limite era de 15 a 30 linhas; treine com 15 a 20, que é o limite do CFO CBMPE."
+   ]
+  },
+  {
+   "id": 3,
+   "tipo": "real",
+   "tema": "O tempo utilizado na internet é prejudicial para as pessoas ou é uma necessidade do mundo contemporâneo?",
+   "fonte": "Instituto AOCP – PMGO, Soldado de 2ª Classe (2022)",
+   "link": "https://cdn.direcaoconcursos.com.br/uploads/2023/03/Prova-discursiva_PMGO.pdf",
+   "comando": "A partir da leitura dos textos motivadores e com base nos seus conhecimentos, redija um texto dissertativo-argumentativo, em modalidade escrita formal da língua portuguesa, sobre o tema: “O tempo utilizado na internet é prejudicial para as pessoas ou é uma necessidade do mundo contemporâneo?”. Apresente um ponto de vista e argumentos que o sustentem, sem copiar os textos motivadores.",
+   "resumo_textos": "Uma notícia sobre o crescimento do número de usuários de internet no mundo e do tempo diário conectado, e uma tirinha sobre o uso da tecnologia.",
+   "textos": [],
+   "dicas": [
+    "O tema é uma pergunta: responda de forma clara na introdução (por exemplo, é necessidade, mas o excesso prejudica).",
+    "Argumentos: a internet é essencial ao trabalho, ao estudo e aos serviços; o uso sem limites afeta o sono, a atenção e as relações.",
+    "Na prova original o limite era de 20 a 30 linhas; treine com 15 a 20."
+   ]
+  },
+  {
+   "id": 4,
+   "tipo": "inedita",
+   "tema": "A cultura de prevenção de incêndios em locais de grande circulação de pessoas no Brasil",
+   "fonte": "Proposta inédita no modelo do Instituto AOCP",
+   "link": "",
+   "comando": "A partir da leitura dos textos motivadores e com base nos seus conhecimentos, redija um texto dissertativo-argumentativo, em modalidade escrita formal da língua portuguesa, sobre o tema: “A cultura de prevenção de incêndios em locais de grande circulação de pessoas no Brasil”. Apresente um ponto de vista e argumentos que o sustentem, sem copiar os textos motivadores.",
+   "resumo_textos": "",
+   "textos": [
+    {
+     "titulo": "Texto I",
+     "texto": "Casas de show, escolas, hospitais e centros comerciais reúnem centenas de pessoas ao mesmo tempo. Nesses lugares, saídas de emergência desobstruídas, extintores em dia, sinalização e brigadas treinadas fazem a diferença entre um susto e uma tragédia. A prevenção, porém, depende tanto da fiscalização quanto da atitude de quem administra e de quem frequenta esses espaços."
+    },
+    {
+     "titulo": "Texto II",
+     "texto": "Após o incêndio da Boate Kiss, em Santa Maria (RS), em 2013, o Brasil aprovou a Lei nº 13.425/2017, conhecida como Lei Kiss, que estabelece diretrizes sobre medidas de prevenção e combate a incêndio e a desastres em estabelecimentos, edificações e áreas de reunião de público."
+    }
+   ],
+   "dicas": [
+    "Tese possível: leis existem, mas a prevenção só funciona quando vira cultura (fiscalização + responsabilidade dos donos + informação do público).",
+    "Argumentos: fiscalização contínua dos Corpos de Bombeiros; educação da população para reconhecer riscos e rotas de fuga."
+   ]
+  },
+  {
+   "id": 5,
+   "tipo": "inedita",
+   "tema": "Desafios para a preservação da saúde mental dos profissionais de segurança pública",
+   "fonte": "Proposta inédita no modelo do Instituto AOCP",
+   "link": "",
+   "comando": "A partir da leitura dos textos motivadores e com base nos seus conhecimentos, redija um texto dissertativo-argumentativo, em modalidade escrita formal da língua portuguesa, sobre o tema: “Desafios para a preservação da saúde mental dos profissionais de segurança pública”. Apresente um ponto de vista e argumentos que o sustentem, sem copiar os textos motivadores.",
+   "resumo_textos": "",
+   "textos": [
+    {
+     "titulo": "Texto I",
+     "texto": "Policiais e bombeiros lidam diariamente com situações de risco, violência e sofrimento humano. Jornadas longas, plantões noturnos e a exposição a ocorrências traumáticas podem provocar estresse, ansiedade e outros problemas que, sem acompanhamento, afetam o profissional, a família e o próprio serviço prestado à sociedade."
+    },
+    {
+     "titulo": "Texto II",
+     "texto": "Programas de apoio psicológico dentro das corporações, acolhimento após ocorrências graves e o combate ao preconceito contra quem procura ajuda são apontados por especialistas como caminhos para proteger quem protege."
+    }
+   ],
+   "dicas": [
+    "Tese possível: cuidar da saúde mental de quem protege a sociedade é parte da própria segurança pública.",
+    "Argumentos: rotina de alto risco e estresse; barreiras culturais (medo de parecer fraco) que afastam o profissional da ajuda."
+   ]
+  },
+  {
+   "id": 6,
+   "tipo": "inedita",
+   "tema": "A educação para o trânsito como caminho para reduzir acidentes no Brasil",
+   "fonte": "Proposta inédita no modelo do Instituto AOCP",
+   "link": "",
+   "comando": "A partir da leitura dos textos motivadores e com base nos seus conhecimentos, redija um texto dissertativo-argumentativo, em modalidade escrita formal da língua portuguesa, sobre o tema: “A educação para o trânsito como caminho para reduzir acidentes no Brasil”. Apresente um ponto de vista e argumentos que o sustentem, sem copiar os textos motivadores.",
+   "resumo_textos": "",
+   "textos": [
+    {
+     "titulo": "Texto I",
+     "texto": "Excesso de velocidade, uso do celular ao volante, desrespeito à faixa de pedestres e falta do cinto de segurança estão entre os comportamentos que mais contribuem para acidentes. Muitos deles começam com hábitos aprendidos cedo e reforçados pela sensação de impunidade."
+    },
+    {
+     "titulo": "Texto II",
+     "texto": "O Código de Trânsito Brasileiro (Lei nº 9.503/1997) prevê a educação para o trânsito como direito de todos e dever prioritário dos órgãos do Sistema Nacional de Trânsito, além de sua promoção nas escolas."
+    }
+   ],
+   "dicas": [
+    "Tese possível: fiscalização pune, mas é a educação contínua (desde a escola) que muda comportamentos.",
+    "Argumentos: formação de hábitos na infância; campanhas permanentes e exemplo dos adultos."
+   ]
+  },
+  {
+   "id": 7,
+   "tipo": "inedita",
+   "tema": "Mudanças climáticas e a prevenção de desastres nas cidades brasileiras",
+   "fonte": "Proposta inédita no modelo do Instituto AOCP",
+   "link": "",
+   "comando": "A partir da leitura dos textos motivadores e com base nos seus conhecimentos, redija um texto dissertativo-argumentativo, em modalidade escrita formal da língua portuguesa, sobre o tema: “Mudanças climáticas e a prevenção de desastres nas cidades brasileiras”. Apresente um ponto de vista e argumentos que o sustentem, sem copiar os textos motivadores.",
+   "resumo_textos": "",
+   "textos": [
+    {
+     "titulo": "Texto I",
+     "texto": "Chuvas intensas, enchentes, deslizamentos de terra e longos períodos de seca têm se tornado mais frequentes. Nas cidades, os efeitos são agravados pela ocupação de encostas e margens de rios, pela impermeabilização do solo e pela falta de drenagem adequada."
+    },
+    {
+     "titulo": "Texto II",
+     "texto": "A Defesa Civil trabalha com prevenção, mitigação, preparação, resposta e recuperação. Sistemas de alerta por mensagem no celular, mapeamento de áreas de risco e planos de evacuação são exemplos de medidas que salvam vidas antes de o desastre acontecer."
+    }
+   ],
+   "dicas": [
+    "Tese possível: o desastre não é só natural; é a soma do evento climático com a falta de planejamento urbano e de prevenção.",
+    "Argumentos: ocupação de áreas de risco; investimento em alerta, mapeamento e educação da população."
+   ]
+  },
+  {
+   "id": 8,
+   "tipo": "inedita",
+   "tema": "Desafios do enfrentamento à violência contra a mulher no Brasil",
+   "fonte": "Proposta inédita no modelo do Instituto AOCP",
+   "link": "",
+   "comando": "A partir da leitura dos textos motivadores e com base nos seus conhecimentos, redija um texto dissertativo-argumentativo, em modalidade escrita formal da língua portuguesa, sobre o tema: “Desafios do enfrentamento à violência contra a mulher no Brasil”. Apresente um ponto de vista e argumentos que o sustentem, sem copiar os textos motivadores.",
+   "resumo_textos": "",
+   "textos": [
+    {
+     "titulo": "Texto I",
+     "texto": "A Lei nº 11.340/2006, a Lei Maria da Penha, criou mecanismos para coibir a violência doméstica e familiar contra a mulher, como as medidas protetivas de urgência. Ela reconhece formas de violência que vão além da física: psicológica, sexual, patrimonial e moral."
+    },
+    {
+     "titulo": "Texto II",
+     "texto": "Muitas vítimas demoram a denunciar por medo, dependência financeira, vergonha ou por não reconhecerem certas agressões como violência. A rede de proteção envolve polícia, Justiça, saúde, assistência social e a própria comunidade."
+    }
+   ],
+   "dicas": [
+    "Tese possível: a lei é avançada, mas o enfrentamento exige rede de proteção que funcione e mudança cultural.",
+    "Argumentos: barreiras para denunciar (dependência, medo); educação para a igualdade e acolhimento eficiente da vítima."
+   ]
+  },
+  {
+   "id": 9,
+   "tipo": "inedita",
+   "tema": "Os impactos das notícias falsas em situações de emergência e calamidade",
+   "fonte": "Proposta inédita no modelo do Instituto AOCP",
+   "link": "",
+   "comando": "A partir da leitura dos textos motivadores e com base nos seus conhecimentos, redija um texto dissertativo-argumentativo, em modalidade escrita formal da língua portuguesa, sobre o tema: “Os impactos das notícias falsas em situações de emergência e calamidade”. Apresente um ponto de vista e argumentos que o sustentem, sem copiar os textos motivadores.",
+   "resumo_textos": "",
+   "textos": [
+    {
+     "titulo": "Texto I",
+     "texto": "Em enchentes, epidemias ou grandes incêndios, mensagens falsas se espalham rapidamente por aplicativos e redes sociais: boatos sobre rompimento de barragens, falsos pedidos de doação, orientações de saúde sem base científica."
+    },
+    {
+     "titulo": "Texto II",
+     "texto": "Órgãos públicos como a Defesa Civil e os Corpos de Bombeiros orientam a população a buscar informações em canais oficiais e a não repassar mensagens sem checar a origem, pois a desinformação pode provocar pânico, atrapalhar o socorro e colocar vidas em risco."
+    }
+   ],
+   "dicas": [
+    "Tese possível: em emergência, a notícia falsa deixa de ser só mentira e vira risco à vida.",
+    "Argumentos: pânico e decisões erradas; golpes e desvio de ajuda. Solução: canais oficiais rápidos e educação midiática."
+   ]
+  },
+  {
+   "id": 10,
+   "tipo": "inedita",
+   "tema": "A participação da comunidade na prevenção de desastres e na defesa civil",
+   "fonte": "Proposta inédita no modelo do Instituto AOCP",
+   "link": "",
+   "comando": "A partir da leitura dos textos motivadores e com base nos seus conhecimentos, redija um texto dissertativo-argumentativo, em modalidade escrita formal da língua portuguesa, sobre o tema: “A participação da comunidade na prevenção de desastres e na defesa civil”. Apresente um ponto de vista e argumentos que o sustentem, sem copiar os textos motivadores.",
+   "resumo_textos": "",
+   "textos": [
+    {
+     "titulo": "Texto I",
+     "texto": "Quando um desastre acontece, os primeiros a agir costumam ser vizinhos, familiares e voluntários, antes mesmo da chegada das equipes de socorro. Comunidades preparadas sabem onde estão os riscos, como pedir ajuda e para onde ir."
+    },
+    {
+     "titulo": "Texto II",
+     "texto": "Núcleos comunitários de defesa civil, simulados de evacuação em bairros e escolas e a formação de voluntários são estratégias usadas para aproximar a população das ações de prevenção."
+    }
+   ],
+   "dicas": [
+    "Tese possível: a defesa civil é mais eficaz quando a população deixa de ser só vítima e passa a ser parte da prevenção.",
+    "Argumentos: conhecimento local dos riscos; resposta mais rápida nos primeiros minutos."
+   ]
+  },
+  {
+   "id": 11,
+   "tipo": "inedita",
+   "tema": "A prática regular de atividade física como questão de saúde pública",
+   "fonte": "Proposta inédita no modelo do Instituto AOCP",
+   "link": "",
+   "comando": "A partir da leitura dos textos motivadores e com base nos seus conhecimentos, redija um texto dissertativo-argumentativo, em modalidade escrita formal da língua portuguesa, sobre o tema: “A prática regular de atividade física como questão de saúde pública”. Apresente um ponto de vista e argumentos que o sustentem, sem copiar os textos motivadores.",
+   "resumo_textos": "",
+   "textos": [
+    {
+     "titulo": "Texto I",
+     "texto": "O sedentarismo está associado ao aumento de doenças como obesidade, diabetes e problemas cardiovasculares, além de afetar a saúde mental. A rotina de trabalho, o uso prolongado de telas e a falta de espaços adequados afastam muitas pessoas do exercício."
+    },
+    {
+     "titulo": "Texto II",
+     "texto": "Praças com equipamentos, ciclovias, programas de esporte nas escolas e incentivo à caminhada são iniciativas que tornam a atividade física mais acessível, especialmente para quem não pode pagar por academias."
+    }
+   ],
+   "dicas": [
+    "Tese possível: incentivar a atividade física é política de saúde, não só escolha individual.",
+    "Argumentos: prevenção de doenças e menos gastos com tratamento; desigualdade no acesso a espaços e tempo livre."
+   ]
+  },
+  {
+   "id": 12,
+   "tipo": "inedita",
+   "tema": "Caminhos para a prevenção de afogamentos no Brasil",
+   "fonte": "Proposta inédita no modelo do Instituto AOCP",
+   "link": "",
+   "comando": "A partir da leitura dos textos motivadores e com base nos seus conhecimentos, redija um texto dissertativo-argumentativo, em modalidade escrita formal da língua portuguesa, sobre o tema: “Caminhos para a prevenção de afogamentos no Brasil”. Apresente um ponto de vista e argumentos que o sustentem, sem copiar os textos motivadores.",
+   "resumo_textos": "",
+   "textos": [
+    {
+     "titulo": "Texto I",
+     "texto": "Praias, rios, lagoas, açudes e piscinas fazem parte do lazer de muitos brasileiros, especialmente no verão e nos feriados. A falta de supervisão de crianças, o consumo de álcool, o desconhecimento das correntes de retorno e o excesso de confiança estão entre as situações de risco mais comuns."
+    },
+    {
+     "titulo": "Texto II",
+     "texto": "Os Corpos de Bombeiros orientam: nadar em locais com guarda-vidas, respeitar a sinalização, nunca perder as crianças de vista e, ao ver alguém se afogando, chamar o socorro e lançar um objeto que flutue, em vez de entrar na água sem preparo."
+    }
+   ],
+   "dicas": [
+    "Tese possível: afogamento é, na maioria das vezes, evitável com informação e supervisão.",
+    "Argumentos: comportamento de risco (álcool, imprudência); falta de educação aquática e de postos de guarda-vidas."
+   ]
+  },
+  {
+   "id": 13,
+   "tipo": "inedita",
+   "tema": "O uso de tecnologias na segurança pública: benefícios e limites",
+   "fonte": "Proposta inédita no modelo do Instituto AOCP",
+   "link": "",
+   "comando": "A partir da leitura dos textos motivadores e com base nos seus conhecimentos, redija um texto dissertativo-argumentativo, em modalidade escrita formal da língua portuguesa, sobre o tema: “O uso de tecnologias na segurança pública: benefícios e limites”. Apresente um ponto de vista e argumentos que o sustentem, sem copiar os textos motivadores.",
+   "resumo_textos": "",
+   "textos": [
+    {
+     "titulo": "Texto I",
+     "texto": "Câmeras de monitoramento, reconhecimento facial, drones, câmeras corporais e análise de dados vêm sendo usados para prevenir crimes, localizar foragidos e dar mais transparência à atuação dos agentes."
+    },
+    {
+     "titulo": "Texto II",
+     "texto": "Especialistas alertam que essas ferramentas exigem regras claras: proteção da privacidade, controle sobre quem acessa as imagens, cuidado com erros de identificação e respeito aos direitos fundamentais previstos na Constituição."
+    }
+   ],
+   "dicas": [
+    "Tese possível: a tecnologia ajuda a segurança pública, mas precisa de limites legais para não violar direitos.",
+    "Argumentos: eficiência e transparência (câmeras corporais); riscos de erro e de vigilância abusiva."
+   ]
+  },
+  {
+   "id": 14,
+   "tipo": "inedita",
+   "tema": "O desafio de combater o bullying e o cyberbullying nas escolas",
+   "fonte": "Proposta inédita no modelo do Instituto AOCP",
+   "link": "",
+   "comando": "A partir da leitura dos textos motivadores e com base nos seus conhecimentos, redija um texto dissertativo-argumentativo, em modalidade escrita formal da língua portuguesa, sobre o tema: “O desafio de combater o bullying e o cyberbullying nas escolas”. Apresente um ponto de vista e argumentos que o sustentem, sem copiar os textos motivadores.",
+   "resumo_textos": "",
+   "textos": [
+    {
+     "titulo": "Texto I",
+     "texto": "Apelidos humilhantes, exclusão, agressões e ameaças repetidas podem deixar marcas profundas em crianças e adolescentes, afetando o rendimento escolar, a autoestima e a saúde mental. No ambiente digital, as ofensas se espalham com rapidez e acompanham a vítima para fora da escola."
+    },
+    {
+     "titulo": "Texto II",
+     "texto": "A Lei nº 13.185/2015 instituiu o Programa de Combate à Intimidação Sistemática (Bullying), prevendo ações de prevenção, capacitação de professores e orientação de pais e familiares."
+    }
+   ],
+   "dicas": [
+    "Tese possível: o bullying não é brincadeira; é violência que exige ação conjunta de escola, família e poder público.",
+    "Argumentos: consequências psicológicas; o ambiente digital amplia o alcance e dificulta a defesa."
+   ]
+  },
+  {
+   "id": 15,
+   "tipo": "inedita",
+   "tema": "A ocupação de áreas de risco nas cidades e a proteção da vida",
+   "fonte": "Proposta inédita no modelo do Instituto AOCP",
+   "link": "",
+   "comando": "A partir da leitura dos textos motivadores e com base nos seus conhecimentos, redija um texto dissertativo-argumentativo, em modalidade escrita formal da língua portuguesa, sobre o tema: “A ocupação de áreas de risco nas cidades e a proteção da vida”. Apresente um ponto de vista e argumentos que o sustentem, sem copiar os textos motivadores.",
+   "resumo_textos": "",
+   "textos": [
+    {
+     "titulo": "Texto I",
+     "texto": "Encostas íngremes, margens de rios e áreas sujeitas a alagamento são ocupadas, muitas vezes, por famílias que não têm outra opção de moradia. Em períodos de chuva intensa, deslizamentos e enchentes atingem justamente essas comunidades."
+    },
+    {
+     "titulo": "Texto II",
+     "texto": "Políticas de habitação, obras de contenção, monitoramento das áreas de risco e alertas antecipados são apontados como medidas para reduzir mortes, ao lado da retirada preventiva de moradores quando há risco iminente."
+    }
+   ],
+   "dicas": [
+    "Tese possível: o problema é ao mesmo tempo de moradia e de segurança; sem política habitacional, a tragédia se repete.",
+    "Argumentos: desigualdade social empurra famílias para áreas de risco; prevenção custa menos que reconstrução."
+   ]
+  },
+  {
+   "id": 16,
+   "tipo": "inedita",
+   "tema": "Queimadas e incêndios florestais: desafios para a preservação ambiental",
+   "fonte": "Proposta inédita no modelo do Instituto AOCP",
+   "link": "",
+   "comando": "A partir da leitura dos textos motivadores e com base nos seus conhecimentos, redija um texto dissertativo-argumentativo, em modalidade escrita formal da língua portuguesa, sobre o tema: “Queimadas e incêndios florestais: desafios para a preservação ambiental”. Apresente um ponto de vista e argumentos que o sustentem, sem copiar os textos motivadores.",
+   "resumo_textos": "",
+   "textos": [
+    {
+     "titulo": "Texto I",
+     "texto": "Em períodos de seca, o fogo se espalha rapidamente por matas, cerrados e áreas de cultivo. Parte dos incêndios começa de forma criminosa ou por práticas como a queima para limpeza de terrenos, que fogem do controle."
+    },
+    {
+     "titulo": "Texto II",
+     "texto": "Os incêndios florestais destroem a biodiversidade, pioram a qualidade do ar, afetam a saúde da população e exigem grande esforço de brigadistas e bombeiros. A prevenção envolve fiscalização, educação ambiental e alternativas ao uso do fogo no campo."
+    }
+   ],
+   "dicas": [
+    "Tese possível: combater o fogo é necessário, mas prevenir as queimadas é o que realmente protege o meio ambiente.",
+    "Argumentos: ação humana na origem dos incêndios; prejuízos à saúde e à biodiversidade (CF, art. 225)."
+   ]
+  },
+  {
+   "id": 17,
+   "tipo": "inedita",
+   "tema": "A acessibilidade e a inclusão da pessoa com deficiência nos espaços públicos",
+   "fonte": "Proposta inédita no modelo do Instituto AOCP",
+   "link": "",
+   "comando": "A partir da leitura dos textos motivadores e com base nos seus conhecimentos, redija um texto dissertativo-argumentativo, em modalidade escrita formal da língua portuguesa, sobre o tema: “A acessibilidade e a inclusão da pessoa com deficiência nos espaços públicos”. Apresente um ponto de vista e argumentos que o sustentem, sem copiar os textos motivadores.",
+   "resumo_textos": "",
+   "textos": [
+    {
+     "titulo": "Texto I",
+     "texto": "Calçadas esburacadas, ausência de rampas, transporte sem adaptação e falta de informação em formatos acessíveis limitam o direito de ir e vir de milhões de brasileiros com deficiência."
+    },
+    {
+     "titulo": "Texto II",
+     "texto": "A Lei nº 13.146/2015, o Estatuto da Pessoa com Deficiência, define acessibilidade como direito e reconhece que a deficiência resulta da interação entre o impedimento da pessoa e as barreiras do ambiente e das atitudes."
+    }
+   ],
+   "dicas": [
+    "Tese possível: a inclusão depende de remover barreiras físicas e também de atitude.",
+    "Argumentos: barreiras arquitetônicas e no transporte; preconceito e falta de preparo no atendimento."
+   ]
+  },
+  {
+   "id": 18,
+   "tipo": "inedita",
+   "tema": "Ética e integridade no serviço público",
+   "fonte": "Proposta inédita no modelo do Instituto AOCP",
+   "link": "",
+   "comando": "A partir da leitura dos textos motivadores e com base nos seus conhecimentos, redija um texto dissertativo-argumentativo, em modalidade escrita formal da língua portuguesa, sobre o tema: “Ética e integridade no serviço público”. Apresente um ponto de vista e argumentos que o sustentem, sem copiar os textos motivadores.",
+   "resumo_textos": "",
+   "textos": [
+    {
+     "titulo": "Texto I",
+     "texto": "O servidor público lida com recursos e interesses que pertencem a toda a sociedade. Por isso, a Constituição Federal, em seu artigo 37, determina que a administração pública obedeça aos princípios da legalidade, impessoalidade, moralidade, publicidade e eficiência."
+    },
+    {
+     "titulo": "Texto II",
+     "texto": "Pequenos desvios, como usar o cargo para obter vantagens ou favorecer conhecidos, enfraquecem a confiança da população nas instituições. Transparência, controle e formação ética são apontados como antídotos."
+    }
+   ],
+   "dicas": [
+    "Tese possível: a integridade do servidor é a base da confiança da sociedade no Estado.",
+    "Argumentos: prejuízo coletivo da corrupção; papel do exemplo, da transparência e do controle."
+   ]
+  },
+  {
+   "id": 19,
+   "tipo": "inedita",
+   "tema": "Primeiros socorros como conhecimento essencial para o cidadão",
+   "fonte": "Proposta inédita no modelo do Instituto AOCP",
+   "link": "",
+   "comando": "A partir da leitura dos textos motivadores e com base nos seus conhecimentos, redija um texto dissertativo-argumentativo, em modalidade escrita formal da língua portuguesa, sobre o tema: “Primeiros socorros como conhecimento essencial para o cidadão”. Apresente um ponto de vista e argumentos que o sustentem, sem copiar os textos motivadores.",
+   "resumo_textos": "",
+   "textos": [
+    {
+     "titulo": "Texto I",
+     "texto": "Engasgos, desmaios, paradas cardiorrespiratórias e queimaduras podem acontecer em casa, no trabalho ou na rua. Nos primeiros minutos, antes da chegada do socorro especializado, a atitude de quem está por perto pode salvar uma vida."
+    },
+    {
+     "titulo": "Texto II",
+     "texto": "A Lei nº 13.722/2018, conhecida como Lei Lucas, tornou obrigatória a capacitação em noções básicas de primeiros socorros de professores e funcionários de estabelecimentos de ensino públicos e privados de educação básica e de recreação infantil."
+    }
+   ],
+   "dicas": [
+    "Tese possível: saber o básico de primeiros socorros deveria ser tão comum quanto saber ler.",
+    "Argumentos: o tempo é decisivo; ensino nas escolas e locais de trabalho multiplica quem sabe agir."
+   ]
+  },
+  {
+   "id": 20,
+   "tipo": "inedita",
+   "tema": "A proteção de dados pessoais na era digital",
+   "fonte": "Proposta inédita no modelo do Instituto AOCP",
+   "link": "",
+   "comando": "A partir da leitura dos textos motivadores e com base nos seus conhecimentos, redija um texto dissertativo-argumentativo, em modalidade escrita formal da língua portuguesa, sobre o tema: “A proteção de dados pessoais na era digital”. Apresente um ponto de vista e argumentos que o sustentem, sem copiar os textos motivadores.",
+   "resumo_textos": "",
+   "textos": [
+    {
+     "titulo": "Texto I",
+     "texto": "Ao usar aplicativos, fazer compras on-line ou se cadastrar em serviços, as pessoas fornecem nome, documentos, endereço e hábitos de consumo. Vazamentos de dados facilitam golpes, fraudes bancárias e outros crimes."
+    },
+    {
+     "titulo": "Texto II",
+     "texto": "A Lei nº 13.709/2018, a Lei Geral de Proteção de Dados Pessoais (LGPD), estabelece regras para o tratamento de dados pessoais por empresas e pelo poder público, com o objetivo de proteger a liberdade e a privacidade dos cidadãos."
+    }
+   ],
+   "dicas": [
+    "Tese possível: proteger dados é proteger a pessoa; exige lei aplicada, empresas responsáveis e cidadão atento.",
+    "Argumentos: vazamentos alimentam golpes; falta de cuidado individual (senhas, links suspeitos)."
+   ]
+  },
+  {
+   "id": 21,
+   "tipo": "inedita",
+   "tema": "O combate ao trabalho infantil no Brasil",
+   "fonte": "Proposta inédita no modelo do Instituto AOCP",
+   "link": "",
+   "comando": "A partir da leitura dos textos motivadores e com base nos seus conhecimentos, redija um texto dissertativo-argumentativo, em modalidade escrita formal da língua portuguesa, sobre o tema: “O combate ao trabalho infantil no Brasil”. Apresente um ponto de vista e argumentos que o sustentem, sem copiar os textos motivadores.",
+   "resumo_textos": "",
+   "textos": [
+    {
+     "titulo": "Texto I",
+     "texto": "A Constituição Federal proíbe qualquer trabalho a menores de 16 anos, salvo na condição de aprendiz, a partir dos 14 anos, e veda o trabalho noturno, perigoso ou insalubre a menores de 18 anos."
+    },
+    {
+     "titulo": "Texto II",
+     "texto": "Apesar da proibição, crianças ainda trabalham em feiras, lavouras, no comércio de rua e em serviços domésticos. O trabalho precoce costuma estar ligado à pobreza e prejudica a escolarização, a saúde e o desenvolvimento."
+    }
+   ],
+   "dicas": [
+    "Tese possível: o trabalho infantil rouba o futuro e perpetua a pobreza.",
+    "Argumentos: abandono escolar; necessidade de apoio às famílias e de fiscalização."
+   ]
+  },
+  {
+   "id": 22,
+   "tipo": "inedita",
+   "tema": "O envelhecimento da população e o cuidado com a pessoa idosa",
+   "fonte": "Proposta inédita no modelo do Instituto AOCP",
+   "link": "",
+   "comando": "A partir da leitura dos textos motivadores e com base nos seus conhecimentos, redija um texto dissertativo-argumentativo, em modalidade escrita formal da língua portuguesa, sobre o tema: “O envelhecimento da população e o cuidado com a pessoa idosa”. Apresente um ponto de vista e argumentos que o sustentem, sem copiar os textos motivadores.",
+   "resumo_textos": "",
+   "textos": [
+    {
+     "titulo": "Texto I",
+     "texto": "A população brasileira está envelhecendo. Isso traz desafios para a saúde, a previdência, a mobilidade urbana e o cuidado familiar, além da necessidade de combater o abandono e a violência contra idosos."
+    },
+    {
+     "titulo": "Texto II",
+     "texto": "O Estatuto da Pessoa Idosa (Lei nº 10.741/2003) garante às pessoas com 60 anos ou mais direitos como prioridade no atendimento, proteção contra negligência e violência e acesso à saúde."
+    }
+   ],
+   "dicas": [
+    "Tese possível: envelhecer com dignidade exige que o país se prepare agora.",
+    "Argumentos: pressão sobre saúde e cuidado familiar; violência e abandono como problema social."
+   ]
+  },
+  {
+   "id": 23,
+   "tipo": "inedita",
+   "tema": "Álcool e direção: um desafio permanente para a segurança no trânsito",
+   "fonte": "Proposta inédita no modelo do Instituto AOCP",
+   "link": "",
+   "comando": "A partir da leitura dos textos motivadores e com base nos seus conhecimentos, redija um texto dissertativo-argumentativo, em modalidade escrita formal da língua portuguesa, sobre o tema: “Álcool e direção: um desafio permanente para a segurança no trânsito”. Apresente um ponto de vista e argumentos que o sustentem, sem copiar os textos motivadores.",
+   "resumo_textos": "",
+   "textos": [
+    {
+     "titulo": "Texto I",
+     "texto": "O álcool reduz os reflexos, a atenção e a noção de risco. Mesmo assim, ainda é comum que motoristas dirijam depois de beber, acreditando que estão no controle."
+    },
+    {
+     "titulo": "Texto II",
+     "texto": "Desde a Lei nº 11.705/2008, conhecida como Lei Seca, o Código de Trânsito passou a punir com rigor quem dirige sob influência de álcool, e operações de fiscalização com etilômetro tornaram-se frequentes nas cidades."
+    }
+   ],
+   "dicas": [
+    "Tese possível: a lei avançou, mas a mudança definitiva depende de consciência e fiscalização constantes.",
+    "Argumentos: sensação de impunidade; alternativas (motorista da vez, transporte por aplicativo) e campanhas."
+   ]
+  },
+  {
+   "id": 24,
+   "tipo": "inedita",
+   "tema": "A importância da doação de sangue e de órgãos no Brasil",
+   "fonte": "Proposta inédita no modelo do Instituto AOCP",
+   "link": "",
+   "comando": "A partir da leitura dos textos motivadores e com base nos seus conhecimentos, redija um texto dissertativo-argumentativo, em modalidade escrita formal da língua portuguesa, sobre o tema: “A importância da doação de sangue e de órgãos no Brasil”. Apresente um ponto de vista e argumentos que o sustentem, sem copiar os textos motivadores.",
+   "resumo_textos": "",
+   "textos": [
+    {
+     "titulo": "Texto I",
+     "texto": "Acidentes, cirurgias e tratamentos de doenças graves dependem de sangue disponível nos hemocentros. Em feriados e férias, os estoques costumam cair, enquanto a procura aumenta."
+    },
+    {
+     "titulo": "Texto II",
+     "texto": "No Brasil, a doação de órgãos de pessoa falecida depende da autorização da família. Por isso, especialistas recomendam que quem deseja ser doador converse com os familiares e deixe clara a sua vontade."
+    }
+   ],
+   "dicas": [
+    "Tese possível: doar é um gesto simples que salva vidas, mas depende de informação e de quebrar mitos.",
+    "Argumentos: desinformação e medo; campanhas permanentes e diálogo em família."
+   ]
+  },
+  {
+   "id": 25,
+   "tipo": "inedita",
+   "tema": "Saneamento básico como direito e condição para a saúde",
+   "fonte": "Proposta inédita no modelo do Instituto AOCP",
+   "link": "",
+   "comando": "A partir da leitura dos textos motivadores e com base nos seus conhecimentos, redija um texto dissertativo-argumentativo, em modalidade escrita formal da língua portuguesa, sobre o tema: “Saneamento básico como direito e condição para a saúde”. Apresente um ponto de vista e argumentos que o sustentem, sem copiar os textos motivadores.",
+   "resumo_textos": "",
+   "textos": [
+    {
+     "titulo": "Texto I",
+     "texto": "Água tratada, coleta e tratamento de esgoto, drenagem urbana e manejo do lixo ainda não chegam a toda a população. A falta de saneamento favorece doenças, polui rios e afeta principalmente as famílias mais pobres."
+    },
+    {
+     "titulo": "Texto II",
+     "texto": "Especialistas apontam que investir em saneamento reduz gastos com saúde, melhora a qualidade de vida e protege o meio ambiente, sendo uma das bases do desenvolvimento."
+    }
+   ],
+   "dicas": [
+    "Tese possível: sem saneamento não há saúde pública; é investimento, não gasto.",
+    "Argumentos: doenças evitáveis; desigualdade regional e social no acesso."
+   ]
+  },
+  {
+   "id": 26,
+   "tipo": "inedita",
+   "tema": "O lixo nas cidades e a responsabilidade de todos",
+   "fonte": "Proposta inédita no modelo do Instituto AOCP",
+   "link": "",
+   "comando": "A partir da leitura dos textos motivadores e com base nos seus conhecimentos, redija um texto dissertativo-argumentativo, em modalidade escrita formal da língua portuguesa, sobre o tema: “O lixo nas cidades e a responsabilidade de todos”. Apresente um ponto de vista e argumentos que o sustentem, sem copiar os textos motivadores.",
+   "resumo_textos": "",
+   "textos": [
+    {
+     "titulo": "Texto I",
+     "texto": "Lixo jogado em ruas e canais entope bueiros, agrava alagamentos, atrai animais transmissores de doenças e polui rios e praias. Grande parte do material descartado poderia ser reciclado ou reaproveitado."
+    },
+    {
+     "titulo": "Texto II",
+     "texto": "A Política Nacional de Resíduos Sólidos (Lei nº 12.305/2010) estabelece a responsabilidade compartilhada: poder público, empresas e consumidores têm deveres no destino correto dos resíduos."
+    }
+   ],
+   "dicas": [
+    "Tese possível: o lixo é problema de todos, e a solução também precisa ser compartilhada.",
+    "Argumentos: impacto em enchentes e saúde; coleta seletiva e educação ambiental."
+   ]
+  },
+  {
+   "id": 27,
+   "tipo": "inedita",
+   "tema": "Hierarquia e disciplina nas instituições militares diante dos desafios da sociedade atual",
+   "fonte": "Proposta inédita no modelo do Instituto AOCP",
+   "link": "",
+   "comando": "A partir da leitura dos textos motivadores e com base nos seus conhecimentos, redija um texto dissertativo-argumentativo, em modalidade escrita formal da língua portuguesa, sobre o tema: “Hierarquia e disciplina nas instituições militares diante dos desafios da sociedade atual”. Apresente um ponto de vista e argumentos que o sustentem, sem copiar os textos motivadores.",
+   "resumo_textos": "",
+   "textos": [
+    {
+     "titulo": "Texto I",
+     "texto": "A Constituição Federal define as polícias militares e os corpos de bombeiros militares como instituições organizadas com base na hierarquia e na disciplina. Esses princípios garantem unidade de comando e rapidez na resposta em situações de crise."
+    },
+    {
+     "titulo": "Texto II",
+     "texto": "Ao mesmo tempo, a sociedade exige das instituições transparência, respeito aos direitos humanos, valorização dos profissionais e diálogo. O desafio é conciliar a tradição militar com essas novas demandas."
+    }
+   ],
+   "dicas": [
+    "Tese possível: hierarquia e disciplina continuam essenciais, desde que exercidas com respeito, legalidade e liderança.",
+    "Argumentos: eficiência em situações de crise; liderança pelo exemplo e valorização do profissional."
+   ]
+  },
+  {
+   "id": 28,
+   "tipo": "inedita",
+   "tema": "Liderança e trabalho em equipe em situações de crise",
+   "fonte": "Proposta inédita no modelo do Instituto AOCP",
+   "link": "",
+   "comando": "A partir da leitura dos textos motivadores e com base nos seus conhecimentos, redija um texto dissertativo-argumentativo, em modalidade escrita formal da língua portuguesa, sobre o tema: “Liderança e trabalho em equipe em situações de crise”. Apresente um ponto de vista e argumentos que o sustentem, sem copiar os textos motivadores.",
+   "resumo_textos": "",
+   "textos": [
+    {
+     "titulo": "Texto I",
+     "texto": "Em um grande incêndio, enchente ou acidente com várias vítimas, decisões precisam ser tomadas em segundos. Comunicação clara, divisão de tarefas e confiança entre os membros da equipe são decisivos para o sucesso da operação."
+    },
+    {
+     "titulo": "Texto II",
+     "texto": "Estudos sobre gestão de emergências destacam que o bom líder não é apenas quem dá ordens, mas quem conhece a sua equipe, mantém a calma, comunica com clareza e assume a responsabilidade pelas decisões."
+    }
+   ],
+   "dicas": [
+    "Tese possível: em crises, a liderança se prova pela capacidade de coordenar pessoas, não só de mandar.",
+    "Argumentos: comunicação e confiança; preparo prévio (treinamentos e simulados)."
+   ]
+  },
+  {
+   "id": 29,
+   "tipo": "inedita",
+   "tema": "Prevenção ao uso de drogas entre adolescentes e jovens",
+   "fonte": "Proposta inédita no modelo do Instituto AOCP",
+   "link": "",
+   "comando": "A partir da leitura dos textos motivadores e com base nos seus conhecimentos, redija um texto dissertativo-argumentativo, em modalidade escrita formal da língua portuguesa, sobre o tema: “Prevenção ao uso de drogas entre adolescentes e jovens”. Apresente um ponto de vista e argumentos que o sustentem, sem copiar os textos motivadores.",
+   "resumo_textos": "",
+   "textos": [
+    {
+     "titulo": "Texto I",
+     "texto": "A adolescência é uma fase de descobertas, influência dos amigos e busca por aceitação. O contato precoce com álcool, cigarro eletrônico e outras drogas pode trazer dependência e prejuízos aos estudos e às relações."
+    },
+    {
+     "titulo": "Texto II",
+     "texto": "Programas de prevenção que envolvem escola, família, esporte, cultura e oportunidades para os jovens são apontados como mais eficazes do que ações apenas repressivas."
+    }
+   ],
+   "dicas": [
+    "Tese possível: prevenir é oferecer informação e alternativas, não só proibir.",
+    "Argumentos: vulnerabilidade da adolescência; papel da escola, da família e de oportunidades."
+   ]
+  },
+  {
+   "id": 30,
+   "tipo": "inedita",
+   "tema": "Apostas on-line e seus impactos sociais no Brasil",
+   "fonte": "Proposta inédita no modelo do Instituto AOCP",
+   "link": "",
+   "comando": "A partir da leitura dos textos motivadores e com base nos seus conhecimentos, redija um texto dissertativo-argumentativo, em modalidade escrita formal da língua portuguesa, sobre o tema: “Apostas on-line e seus impactos sociais no Brasil”. Apresente um ponto de vista e argumentos que o sustentem, sem copiar os textos motivadores.",
+   "resumo_textos": "",
+   "textos": [
+    {
+     "titulo": "Texto I",
+     "texto": "Os sites e aplicativos de apostas esportivas e jogos on-line se popularizaram rapidamente, com propagandas em camisas de times, transmissões e redes sociais. A promessa de dinheiro fácil atrai especialmente os jovens."
+    },
+    {
+     "titulo": "Texto II",
+     "texto": "Especialistas em saúde e finanças alertam para o risco de endividamento das famílias e de comportamento compulsivo, e defendem regras claras para a publicidade, proteção a menores de idade e informação sobre os riscos."
+    }
+   ],
+   "dicas": [
+    "Tese possível: apostas on-line deixaram de ser só entretenimento e viraram questão de saúde e de finanças públicas.",
+    "Argumentos: endividamento e vício; publicidade agressiva e necessidade de regulação e educação financeira."
+   ]
+  }
+ ]
+}

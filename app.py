@@ -1890,6 +1890,74 @@ def abas_por_dia(conn, meta_id, inicio, idx_ref, hoje, conteudo_hoje=None, dias_
     return rodando
 
 # -----------------------------------------------------------------------------
+# NOVO (03/11/2026): BANCO DE PROPOSTAS DE REDAÇÃO (modelo Instituto AOCP)
+# -----------------------------------------------------------------------------
+PROPOSTAS_PATH = os.path.join(BASE_DIR, "propostas_redacao.json")
+
+@st.cache_data
+def _ler_propostas(_mtime):
+    import json as _jp
+    with open(PROPOSTAS_PATH, encoding="utf-8") as f:
+        return _jp.load(f)
+
+def banco_propostas():
+    try:
+        return _ler_propostas(os.path.getmtime(PROPOSTAS_PATH))
+    except Exception:
+        return {"propostas": [], "instrucoes": [], "aviso": ""}
+
+def propostas_feitas(conn):
+    """Ids das propostas cujo tema já tem redação registrada."""
+    temas = {(t or "").strip().lower() for (t,) in conn.execute("SELECT tema FROM redacoes").fetchall()}
+    return {p["id"] for p in banco_propostas()["propostas"] if p["tema"].strip().lower() in temas}
+
+def _mapa_propostas():
+    try:
+        return _json_esc.loads(get_config("redacao_proposta_por_bloco", "{}"))
+    except Exception:
+        return {}
+
+def proposta_do_bloco(conn, topico_id, trocar=False):
+    """Proposta da vez para um bloco de redação: fica fixa no bloco; a próxima é a primeira ainda não usada nem feita."""
+    props = banco_propostas()["propostas"]
+    if not props:
+        return None
+    mapa = _mapa_propostas()
+    chave = str(int(topico_id))
+    if chave in mapa and not trocar:
+        return next((p for p in props if p["id"] == mapa[chave]), None)
+    usadas = set(mapa.values()) | propostas_feitas(conn)
+    atual = mapa.get(chave)
+    candidatas = [p for p in props if p["id"] not in usadas] or [p for p in props if p["id"] != atual]
+    if trocar and atual is not None:   # na troca, pega a próxima depois da atual
+        depois = [p for p in candidatas if p["id"] > atual]
+        candidatas = depois or candidatas
+    escolhida = candidatas[0]
+    mapa[chave] = escolhida["id"]
+    set_config("redacao_proposta_por_bloco", _json_esc.dumps(mapa))
+    return escolhida
+
+def mostrar_proposta(p, chave):
+    banco = banco_propostas()
+    st.markdown(f"#### 📄 Proposta nº {p['id']}: {p['tema']}")
+    st.caption(("🗂️ Tema REAL de prova: " if p["tipo"] == "real" else "🆕 ") + p["fonte"])
+    if p["tipo"] == "real":
+        st.write(f"**Textos motivadores originais:** {p['resumo_textos']}")
+        st.markdown(f"[📎 Abrir a prova original (os textos estão lá)]({p['link']})")
+    else:
+        for t in p["textos"]:
+            st.markdown(f"**{t['titulo']}**")
+            st.markdown(f"> {t['texto']}")
+    st.markdown(f"**Proposta de redação.** {p['comando']}")
+    st.markdown("**Instruções:**\n" + "\n".join(f"- {i}" for i in banco.get("instrucoes", [])))
+    if p["tipo"] != "real" and banco.get("aviso"):
+        st.caption("ℹ️ " + banco["aviso"])
+    if st.toggle("💡 Ideias de abordagem (veja só depois de planejar o seu texto)", key=f"dicas_{chave}"):
+        st.markdown("\n".join(f"- {d}" for d in p["dicas"]))
+    st.caption("Depois de escrever à mão, fotografe e envie ao Claude para a correção pelos critérios do edital; "
+               "lance a nota em ✍️ Redações.")
+
+# -----------------------------------------------------------------------------
 # NOVO: CARTÃO DE BLOCO (usado nos blocos de hoje e nas pendências do fim de semana)
 # Cronômetro + questões (acertos/erros) + concluir/parcial, tudo no mesmo lugar.
 # Devolve True se o cronômetro deste bloco estiver rodando (a tela atualiza a cada segundo).
@@ -1950,6 +2018,15 @@ def cartao_bloco(conn, row, meta_id, mostrar_data=False, expandido=None):
         orientacao = buscar_orientacao(conn, row['materia'], row['nome'])
         if orientacao:
             st.info("📌 **Orientação**\n\n" + orientacao)
+        if row['materia'] == RED:
+            _prop = proposta_do_bloco(conn, topico_id)
+            if _prop:
+                if st.toggle(f"📄 Ver a proposta de redação de hoje: {_prop['tema'][:70]}", key=f"prop_tg_{topico_id}"):
+                    with st.container(border=True):
+                        mostrar_proposta(_prop, f"bl_{topico_id}")
+                        if st.button("🔄 Trocar por outra proposta", key=f"prop_troca_{topico_id}"):
+                            proposta_do_bloco(conn, topico_id, trocar=True)
+                            st.rerun()
         if row['materia'] == REV and row['status'] != "Concluído":
             _foco = foco_sugerido(conn, meta_id)
             if _foco:
@@ -2950,13 +3027,30 @@ elif menu == "✍️ Redações":
             "lápis ou tinta que não seja azul/preta, identificação de qualquer tipo.")
 
     # ---------------- registrar ----------------
+    _props = banco_propostas()["propostas"]
+    _tema_padrao = ""
+    if _props:
+        st.subheader("📚 Banco de propostas (modelo AOCP)")
+        _feitas = propostas_feitas(conn)
+        st.caption(f"{len(_feitas)} de {len(_props)} já feitas. Nos dias de redação, o bloco do cronograma já mostra a próxima. "
+                   "Quando acabar, peça mais ao Claude.")
+        _rotulo = {p["id"]: f"{'✅' if p['id'] in _feitas else ('🗂️' if p['tipo'] == 'real' else '🆕')} {p['id']:02d} · {p['tema']}"
+                   for p in _props}
+        _sel = st.selectbox("Ver uma proposta", [p["id"] for p in _props], format_func=lambda i: _rotulo[i], key="banco_sel")
+        _p = next(p for p in _props if p["id"] == _sel)
+        with st.expander("Abrir esta proposta", expanded=False):
+            mostrar_proposta(_p, f"banco_{_sel}")
+        _tema_padrao = _p["tema"]
+        st.caption("🗂️ = tema real de prova da AOCP · 🆕 = inédita no modelo da banca · ✅ = já registrada em ✍️ Redações. "
+                   "Ao registrar uma redação, o tema escolhido acima já vem preenchido.")
+
     st.subheader("➕ Registrar uma redação corrigida")
     with st.form("form_redacao", clear_on_submit=True):
         c1, c2 = st.columns([1, 3])
         with c1:
             data_red = st.date_input("Data", value=hoje_local(), format="DD/MM/YYYY")
         with c2:
-            tema = st.text_input("Tema da redação")
+            tema = st.text_input("Tema da redação", value=_tema_padrao)
         linhas = st.number_input("Linhas usadas na folha", min_value=0, max_value=40, value=20, step=1)
         zerada = st.checkbox("A redação levou nota ZERO (item 12.8)")
         motivo = st.selectbox("Motivo da nota zero (só se marcou acima)", MOTIVOS_ZERO)

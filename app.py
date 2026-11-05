@@ -7,7 +7,7 @@ import math
 import os
 from zoneinfo import ZoneInfo
 
-st.set_page_config(page_title="Sistema de Estudos & Carreira", layout="wide", page_icon="🛡️")
+st.set_page_config(page_title="Sistema de Estudos & Carreira", layout="wide", page_icon=os.path.join(os.path.dirname(os.path.abspath(__file__)), "icone.png"))
 
 # -----------------------------------------------------------------------------
 # BANCO DE DADOS DINÂMICO (CAMINHO ABSOLUTO FIXO)

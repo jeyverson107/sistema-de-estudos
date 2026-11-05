@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sistema de Estudos</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/png" href="icone-192.png">
+<link rel="apple-touch-icon" href="icone-192.png">
+<meta name="theme-color" content="#1d4ed8">
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+         font-family: system-ui, sans-serif; background: #1d4ed8; color: #fff; text-align: center; padding: 16px; box-sizing: border-box; }
+  img { width: 112px; height: 112px; border-radius: 26px; box-shadow: 0 6px 24px rgba(0,0,0,.25); }
+  a.botao { display: inline-block; margin-top: 20px; padding: 14px 26px; border-radius: 12px; background: #fff;
+            color: #1d4ed8; font-weight: 700; text-decoration: none; font-size: 18px; }
+  .dica { max-width: 420px; margin: 22px auto 0; font-size: 15px; line-height: 1.5; opacity: .95; }
+</style>
+</head>
+<body>
+<main>
+  <img src="icone-512.png" alt="">
+  <h1>Sistema de Estudos</h1>
+  <div id="conteudo"></div>
+</main>
+<script>
+  const URL_APP = "https://sistema-de-estudos-ocjuzxtvkika87fec7uesp.streamlit.app";
+  const instalado = window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone;
+  const c = document.getElementById("conteudo");
+  if (!URL_APP) {
+    c.innerHTML = '<p class="dica">O link deste app ainda não foi configurado.</p>';
+  } else if (instalado) {
+    c.innerHTML = '<p class="dica">Abrindo…</p>';
+    window.location.replace(URL_APP);
+  } else {
+    c.innerHTML = '<a class="botao" href="' + URL_APP + '">Abrir o app</a>' +
+      '<p class="dica"><b>Para colocar este ícone na tela inicial:</b><br>no Chrome, toque em <b>⋮</b> (canto de cima) → ' +
+      '<b>Adicionar à tela inicial</b> (ou <b>Instalar app</b>). No iPhone, use <b>Compartilhar → Adicionar à Tela de Início</b>.</p>';
+  }
+</script>
+</body>
+</html>

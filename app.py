@@ -1958,6 +1958,110 @@ def mostrar_proposta(p, chave):
                "lance a nota em ✍️ Redações.")
 
 # -----------------------------------------------------------------------------
+# NOVO (09/11/2026): REGISTRO DA CORREÇÃO DA REDAÇÃO (usado no bloco do dia e em ✍️ Redações)
+# A correção do Claude termina com uma linha-código, por exemplo:
+#   📋 PARA O APP: A1=6 | A2=6,5 | A3=5 | A4=5,5 | LINHAS=18 | ZERO=NÃO
+# Colando a correção inteira no campo de comentário, o app lê as notas sozinho.
+# -----------------------------------------------------------------------------
+# Tabela 12.2 do edital (2º Tenente): pontuação máxima por aspecto
+ASPECTOS_RED = [
+    ("a1", "1. Tema, informatividade e argumentação", 8.0),
+    ("a2", "2. Coesão e coerência", 8.0),
+    ("a3", "3. Estrutura dissertativo-argumentativa", 7.0),
+    ("a4", "4. Gramática (pontuação, grafia/legibilidade, concordância, regência, colocação)", 7.0),
+]
+NOTA_MAX_RED, NOTA_MIN_RED = 30.0, 9.0      # item 12.3, b
+LINHAS_MIN_RED, LINHAS_MAX_RED = 15, 20     # item 12.6
+MOTIVOS_ZERO_RED = ["Fuga ao tema", "Tipologia diferente de dissertação", "Desestruturação acentuada",
+                    "Letra ilegível / espaçamento excessivo", "Identificação no texto", "Outro motivo do item 12.8"]
+
+def ler_codigo_correcao(texto):
+    """Procura a linha 'PARA O APP' na correção colada. Devolve dict com a1..a4, linhas, zero; ou None."""
+    import re as _re
+    if not texto:
+        return None
+    linha = next((l for l in texto.splitlines() if "PARA O APP" in l.upper()), None)
+    if not linha:
+        return None
+    achado = {}
+    for chave in ("A1", "A2", "A3", "A4", "LINHAS"):
+        m = _re.search(chave + r"\s*[=:]\s*([0-9]+(?:[.,][0-9]+)?)", linha, _re.I)
+        if m:
+            achado[chave.lower()] = float(m.group(1).replace(",", "."))
+    m = _re.search(r"ZERO\s*[=:]\s*(SIM|N[AÃ]O)", linha, _re.I)
+    achado["zero"] = bool(m and m.group(1).upper() == "SIM")
+    if not all(k in achado for k in ("a1", "a2", "a3", "a4")):
+        return None
+    for ch, _nome, mx in ASPECTOS_RED:
+        if not (0 <= achado[ch] <= mx):
+            return None
+    return achado
+
+def form_registrar_redacao(conn, chave, tema_padrao="", topico_id=None):
+    """Formulário para lançar a correção de uma redação. Se topico_id vier, também conclui o bloco do dia."""
+    with st.form(f"form_redacao_{chave}", clear_on_submit=True):
+        st.markdown("**Jeito rápido:** cole abaixo a correção inteira que o Claude te devolveu. "
+                    "O app lê as notas sozinho na linha **📋 PARA O APP** (não precisa preencher os números).")
+        comentario = st.text_area("Correção do Claude (cole tudo aqui)", height=160, key=f"red_com_{chave}")
+        c1, c2 = st.columns([1, 3])
+        with c1:
+            data_red = st.date_input("Data", value=hoje_local(), format="DD/MM/YYYY", key=f"red_dt_{chave}")
+        with c2:
+            tema = st.text_input("Tema da redação", value=tema_padrao, key=f"red_tema_{chave}")
+        with st.expander("✍️ Preencher as notas à mão (só se a correção não tiver a linha 📋 PARA O APP)"):
+            linhas = st.number_input("Linhas usadas na folha", min_value=0, max_value=40, value=20, step=1,
+                                     key=f"red_lin_{chave}")
+            zerada = st.checkbox("A redação levou nota ZERO (item 12.8)", key=f"red_zero_{chave}")
+            notas = {}
+            cols = st.columns(2)
+            for i, (ch, nome, maximo) in enumerate(ASPECTOS_RED):
+                with cols[i % 2]:
+                    notas[ch] = st.number_input(f"{nome} (máx. {maximo:g})", min_value=0.0, max_value=maximo,
+                                                value=0.0, step=0.25, key=f"red_{ch}_{chave}")
+        motivo = st.selectbox("Motivo da nota zero (só se a redação zerou)", MOTIVOS_ZERO_RED, key=f"red_mot_{chave}")
+        rotulo = "💾 Salvar a correção e concluir o bloco" if topico_id else "💾 Salvar redação"
+        if st.form_submit_button(rotulo):
+            lido = ler_codigo_correcao(comentario)
+            if lido:
+                notas = {ch: lido[ch] for ch, _n, _m in ASPECTOS_RED}
+                zerada = lido["zero"]
+                if "linhas" in lido:
+                    linhas = int(lido["linhas"])
+            if not tema.strip():
+                avisar("Nada foi salvo: escreva o tema da redação.", "warning")
+            elif not lido and sum(notas.values()) == 0 and not zerada:
+                avisar("Nada foi salvo: não achei a linha 📋 PARA O APP na correção colada e as notas à mão "
+                       "estão todas em zero. Cole a correção completa ou preencha as notas.", "warning")
+            else:
+                if zerada:
+                    notas = {k: 0.0 for k in notas}
+                total = round(sum(notas.values()), 2)
+                try:
+                    c = conn.cursor()
+                    c.execute("""INSERT INTO redacoes (data, tema, linhas, a1, a2, a3, a4, total, zerada, motivo_zero, comentario)
+                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                              (data_red.isoformat(), tema.strip(), int(linhas), notas["a1"], notas["a2"], notas["a3"],
+                               notas["a4"], total, 1 if zerada else 0, motivo if zerada else None, comentario.strip()))
+                    conn.commit()
+                    conf = conn.execute("SELECT total FROM redacoes WHERE id = ?", (c.lastrowid,)).fetchone()
+                    if conf is not None and abs(conf[0] - total) < 0.001:
+                        situacao = "ELIMINADO (abaixo de 9)" if total < NOTA_MIN_RED else "acima do mínimo"
+                        origem = "lidas da correção colada" if lido else "digitadas à mão"
+                        avisar(f"Salvo e conferido: \"{tema.strip()[:60]}\" com {total:g}/30 ({situacao}). "
+                               f"Notas {origem}: {notas['a1']:g} + {notas['a2']:g} + {notas['a3']:g} + {notas['a4']:g}; "
+                               f"{int(linhas)} linhas. Veja a evolução em ✍️ Redações.")
+                        if topico_id:
+                            bl = conn.execute("SELECT status, COALESCE(minutos_estudados,0), COALESCE(minutos_planejados,0) "
+                                              "FROM topicos WHERE id = ?", (int(topico_id),)).fetchone()
+                            if bl and bl[0] != "Concluído":
+                                salvar_status_com_aviso(conn, topico_id, "Concluído", bl[1] if bl[1] > 0 else bl[2])
+                    else:
+                        avisar("O app tentou salvar, mas não encontrou o registro ao conferir. Tente de novo.", "error")
+                except Exception as e:
+                    avisar(f"NÃO foi salvo. Erro: {e}", "error")
+            st.rerun()
+
+# -----------------------------------------------------------------------------
 # NOVO: CARTÃO DE BLOCO (usado nos blocos de hoje e nas pendências do fim de semana)
 # Cronômetro + questões (acertos/erros) + concluir/parcial, tudo no mesmo lugar.
 # Devolve True se o cronômetro deste bloco estiver rodando (a tela atualiza a cada segundo).
@@ -2018,6 +2122,7 @@ def cartao_bloco(conn, row, meta_id, mostrar_data=False, expandido=None):
         orientacao = buscar_orientacao(conn, row['materia'], row['nome'])
         if orientacao:
             st.info("📌 **Orientação**\n\n" + orientacao)
+        _prop = None
         if row['materia'] == RED:
             _prop = proposta_do_bloco(conn, topico_id)
             if _prop:
@@ -2081,16 +2186,34 @@ def cartao_bloco(conn, row, meta_id, mostrar_data=False, expandido=None):
 
         # NOVO: questões feitas neste bloco (gravadas junto ao concluir, ou no botão próprio)
         versao = st.session_state.get(f"q_ver_{topico_id}", 0)
-        st.markdown("**📝 Questões deste bloco** (opcional)")
-        q1, q2 = st.columns(2)
-        with q1:
-            q_total = st.number_input("Questões feitas", min_value=0, max_value=500, value=0, step=1,
-                                      key=f"q_tot_{topico_id}_{versao}")
-        with q2:
-            q_erros = st.number_input("Quantas errei", min_value=0, max_value=500, value=0, step=1,
-                                      key=f"q_err_{topico_id}_{versao}")
-        if q_erros > q_total:
-            st.warning("O número de erros não pode ser maior que o de questões feitas.")
+        e_redacao = row['materia'] == RED
+        if e_redacao:
+            # NOVO (09/11/2026): bloco de redação não tem questões; registra a CORREÇÃO (notas do edital)
+            q_total = q_erros = 0
+            _ja_red = None
+            if _prop:
+                _ja_red = conn.execute("SELECT total, data FROM redacoes WHERE lower(trim(tema)) = lower(trim(?)) "
+                                       "ORDER BY id DESC LIMIT 1", (_prop['tema'],)).fetchone()
+            if _ja_red:
+                st.success(f"✍️ Correção desta redação já registrada: **{_ja_red[0]:g}/30** "
+                           f"({_ja_red[1][8:10]}/{_ja_red[1][5:7]}). Veja a evolução em ✍️ Redações.")
+            else:
+                st.markdown("**✍️ Correção desta redação**")
+                st.caption("1) Escreva à mão no tempo do cronômetro. 2) Fotografe e envie ao Claude pedindo a correção. "
+                           "3) Copie a resposta inteira e cole aqui. O app guarda a nota e conclui o bloco.")
+                if st.toggle("📥 Registrar a correção agora", key=f"red_tg_{topico_id}"):
+                    form_registrar_redacao(conn, f"bl_{topico_id}", _prop['tema'] if _prop else "", topico_id)
+        else:
+            st.markdown("**📝 Questões deste bloco** (opcional)")
+            q1, q2 = st.columns(2)
+            with q1:
+                q_total = st.number_input("Questões feitas", min_value=0, max_value=500, value=0, step=1,
+                                          key=f"q_tot_{topico_id}_{versao}")
+            with q2:
+                q_erros = st.number_input("Quantas errei", min_value=0, max_value=500, value=0, step=1,
+                                          key=f"q_err_{topico_id}_{versao}")
+            if q_erros > q_total:
+                st.warning("O número de erros não pode ser maior que o de questões feitas.")
 
         def _gravar_questoes():
             """Grava as questões digitadas (se houver). Devolve texto para o aviso, ou None se houve erro."""
@@ -2106,7 +2229,7 @@ def cartao_bloco(conn, row, meta_id, mostrar_data=False, expandido=None):
             st.session_state[f"q_ver_{topico_id}"] = versao + 1  # limpa os campos
             return f" Questões: {q_total - q_erros} acertos e {q_erros} erros registrados."
 
-        if st.button("💾 Registrar só as questões", key=f"q_salvar_{topico_id}"):
+        if not e_redacao and st.button("💾 Registrar só as questões", key=f"q_salvar_{topico_id}"):
             txt = _gravar_questoes()
             if txt:
                 avisar("Salvo e conferido." + txt)
@@ -3005,17 +3128,8 @@ elif menu == "✍️ Redações":
     import altair as alt
     st.header("✍️ Minhas Redações")
 
-    # Tabela 12.2 do edital (2º Tenente): pontuação máxima por aspecto
-    ASPECTOS = [
-        ("a1", "1. Tema, informatividade e argumentação", 8.0),
-        ("a2", "2. Coesão e coerência", 8.0),
-        ("a3", "3. Estrutura dissertativo-argumentativa", 7.0),
-        ("a4", "4. Gramática (pontuação, grafia/legibilidade, concordância, regência, colocação)", 7.0),
-    ]
-    NOTA_MAX, NOTA_MIN = 30.0, 9.0          # item 12.3, b
-    LINHAS_MIN, LINHAS_MAX = 15, 20          # item 12.6
-    MOTIVOS_ZERO = ["Fuga ao tema", "Tipologia diferente de dissertação", "Desestruturação acentuada",
-                    "Letra ilegível / espaçamento excessivo", "Identificação no texto", "Outro motivo do item 12.8"]
+    ASPECTOS, NOTA_MAX, NOTA_MIN = ASPECTOS_RED, NOTA_MAX_RED, NOTA_MIN_RED
+    LINHAS_MIN, LINHAS_MAX = LINHAS_MIN_RED, LINHAS_MAX_RED
     AZUL, CINZA, VERMELHO = "#256abf", "#9aa0a6", "#d03b3b"
 
     with st.expander("📌 Regras do edital (item 12) – toque para ver", expanded=False):
@@ -3045,47 +3159,7 @@ elif menu == "✍️ Redações":
                    "Ao registrar uma redação, o tema escolhido acima já vem preenchido.")
 
     st.subheader("➕ Registrar uma redação corrigida")
-    with st.form("form_redacao", clear_on_submit=True):
-        c1, c2 = st.columns([1, 3])
-        with c1:
-            data_red = st.date_input("Data", value=hoje_local(), format="DD/MM/YYYY")
-        with c2:
-            tema = st.text_input("Tema da redação", value=_tema_padrao)
-        linhas = st.number_input("Linhas usadas na folha", min_value=0, max_value=40, value=20, step=1)
-        zerada = st.checkbox("A redação levou nota ZERO (item 12.8)")
-        motivo = st.selectbox("Motivo da nota zero (só se marcou acima)", MOTIVOS_ZERO)
-        st.markdown("**Notas por aspecto**")
-        notas = {}
-        cols = st.columns(2)
-        for i, (chave, nome, maximo) in enumerate(ASPECTOS):
-            with cols[i % 2]:
-                notas[chave] = st.number_input(f"{nome} (máx. {maximo:g})", min_value=0.0, max_value=maximo,
-                                               value=0.0, step=0.25, key=f"red_{chave}")
-        comentario = st.text_area("Comentário da correção (cole aqui o que eu te devolver)", height=120)
-
-        if st.form_submit_button("💾 Salvar redação"):
-            if not tema.strip():
-                avisar("Nada foi salvo: escreva o tema da redação.", "warning")
-            else:
-                if zerada:
-                    notas = {k: 0.0 for k in notas}
-                total = round(sum(notas.values()), 2)
-                try:
-                    c = conn.cursor()
-                    c.execute("""INSERT INTO redacoes (data, tema, linhas, a1, a2, a3, a4, total, zerada, motivo_zero, comentario)
-                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                              (data_red.isoformat(), tema.strip(), int(linhas), notas["a1"], notas["a2"], notas["a3"],
-                               notas["a4"], total, 1 if zerada else 0, motivo if zerada else None, comentario.strip()))
-                    conn.commit()
-                    conf = conn.execute("SELECT total FROM redacoes WHERE id = ?", (c.lastrowid,)).fetchone()
-                    if conf is not None and abs(conf[0] - total) < 0.001:
-                        situacao = "ELIMINADO (abaixo de 9)" if total < NOTA_MIN else "acima do mínimo"
-                        avisar(f"Salvo e conferido: \"{tema.strip()[:60]}\" com {total:g}/30 ({situacao}).")
-                    else:
-                        avisar("O app tentou salvar, mas não encontrou o registro ao conferir. Tente de novo.", "error")
-                except Exception as e:
-                    avisar(f"NÃO foi salvo. Erro: {e}", "error")
-            st.rerun()
+    form_registrar_redacao(conn, "menu", _tema_padrao)
 
     # ---------------- evolução ----------------
     df_red = pd.read_sql_query("SELECT * FROM redacoes ORDER BY data, id", conn)

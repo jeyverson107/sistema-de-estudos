@@ -2105,6 +2105,34 @@ if (rodando) {{
 </script>""", height=130)
 
 
+def texto_pedido_caderno(row, orientacao="", anot="", n_questoes=40):
+    """NOVO (10/11/2026): monta o texto que o usuário copia e cola no Claude para receber o caderno em PDF."""
+    nome = str(row['nome'])
+    conteudo = nome.split(' · ', 1)[-1]
+    data_txt = ""
+    if ' · ' in nome:
+        partes = nome.split(' · ', 1)[0].split()
+        data_txt = partes[-1] if partes else ""
+    linhas = [
+        "CADERNO DE QUESTÕES",
+        f"Matéria: {row['materia']}",
+        f"Assunto estudado: {conteudo}",
+    ]
+    if anot and str(row['status']) != "Concluído":
+        linhas.append(f"Estudei só até: {anot}")
+    if orientacao:
+        linhas.append(f"Orientação do bloco (recorte de artigos/itens): {orientacao.strip()}")
+    linhas += [
+        f"Quantidade: {n_questoes} questões, níveis fácil, médio e difícil",
+        f"Bloco: {row['bloco']}" + (f" de {data_txt}" if data_txt else ""),
+        "",
+        "Prioridade para questões de provas reais (de preferência Instituto AOCP); se faltarem, complete com questões "
+        "elaboradas no estilo AOCP, marcadas como tal. Respeite só o que eu estudei e o que o edital do CFO CBMPE cobra. "
+        "Gabarito e comentários no final, no padrão dos meus cadernos.",
+    ]
+    return "\n".join(linhas)
+
+
 def cartao_bloco(conn, row, meta_id, mostrar_data=False, expandido=None):
     topico_id = int(row['id'])
     minutos_plan = int(row['minutos_planejados'] or 0)
@@ -2183,6 +2211,14 @@ def cartao_bloco(conn, row, meta_id, mostrar_data=False, expandido=None):
                 set_timer_stop(topico_id)
                 st.rerun()
         minutos_cronometrados = max(0, round((base_seg - seg_restantes) / 60)) if timer_data['status'] != 'STOPPED' else 0
+
+        # NOVO (10/11/2026): pedido pronto para o Claude gerar o caderno de questões em PDF deste bloco
+        if row['materia'] != RED and st.toggle("📋 Gerar pedido do caderno de questões (PDF)", key=f"cad_tg_{topico_id}"):
+            n_q = st.select_slider("Quantidade de questões", options=[10, 20, 30, 40, 50], value=40,
+                                   key=f"cad_n_{topico_id}")
+            st.caption("Toque no ícone de copiar (canto da caixa), abra a conversa com o Claude no projeto "
+                       "CONCURSO CBMPE e cole. Ele devolve o PDF com gabarito e comentários no final.")
+            st.code(texto_pedido_caderno(row, orientacao, anot, n_q), language=None)
 
         # NOVO: questões feitas neste bloco (gravadas junto ao concluir, ou no botão próprio)
         versao = st.session_state.get(f"q_ver_{topico_id}", 0)

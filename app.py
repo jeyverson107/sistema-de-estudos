@@ -1066,8 +1066,8 @@ st.title("🛡️ Sistema Unificado de Gestão de Estudos")
 # -----------------------------------------------------------------------------
 # NOVO (11/11/2026): REGISTRO DE BATERIA COM VÁRIOS TÓPICOS
 # Ex.: caderno do Estatuto, arts. 1º a 48 (vários assuntos na mesma bateria).
-# - Se você sabe os números de cada tópico: grava um registro por tópico (análise por tópico fica exata).
-# - Se só sabe o total: grava UM registro com a lista de tópicos (a análise da MATÉRIA fica exata).
+# Marca os assuntos cobrados e informa só o TOTAL de questões e erros: grava UM registro
+# com a lista de assuntos (o desempenho da MATÉRIA fica exato).
 # -----------------------------------------------------------------------------
 def registrar_bateria_mista(conn, df_top, materia_nome):
     ver = st.session_state.get("mx_ver", 0)
@@ -1084,42 +1084,21 @@ def registrar_bateria_mista(conn, df_top, materia_nome):
                                 placeholder="Toque aqui e vá marcando os assuntos")
     nome_bat = st.text_input("Nome da bateria (opcional)", key=f"mx_nome_{ver}",
                              placeholder="Ex.: Caderno Estatuto arts. 1º a 48")
-    forma = st.radio("Você sabe quantas questões e erros teve em cada tópico?",
-                     ["Sim, separo por tópico", "Não, só sei o total da bateria"], key=f"mx_forma_{ver}")
     if not escolhidos:
         st.info("Marque pelo menos um tópico para lançar o resultado.")
     else:
-        linhas = []  # (topico_id, acertos, erros)
+        linhas = []  # (topico_id, acertos, erros, assuntos)
         erro_txt = ""
-        if forma.startswith("Sim"):
-            base = pd.DataFrame({"Tópico": [topico_sem_prefixo(n) for n in escolhidos],
-                                 "Questões feitas": [0] * len(escolhidos), "Erros": [0] * len(escolhidos)})
-            tab = st.data_editor(base, hide_index=True, use_container_width=True, disabled=["Tópico"],
-                                 key=f"mx_tab_{ver}", column_config={
-                                     "Questões feitas": st.column_config.NumberColumn(min_value=0, max_value=500, step=1),
-                                     "Erros": st.column_config.NumberColumn(min_value=0, max_value=500, step=1)})
-            for n, (_, r) in zip(escolhidos, tab.iterrows()):
-                q = 0 if pd.isna(r["Questões feitas"]) else int(r["Questões feitas"])
-                e = 0 if pd.isna(r["Erros"]) else int(r["Erros"])
-                if e > q:
-                    erro_txt = f"Em \"{topico_sem_prefixo(n)}\" há mais erros do que questões."
-                if q > 0:
-                    linhas.append((int(ids[n]), q - e, e, None))
-            tq = sum(a + e for _, a, e, _ in linhas); te = sum(e for _, _, e, _ in linhas)
-            if tq:
-                st.write(f"**Total da bateria:** {tq} questões · {te} erros · **{round(100 * (tq - te) / tq)}%** de acerto")
-        else:
-            c1, c2 = st.columns(2)
-            q = c1.number_input("Questões feitas (total)", min_value=0, max_value=1000, step=1, key=f"mx_q_{ver}")
-            e = c2.number_input("Erros (total)", min_value=0, max_value=1000, step=1, key=f"mx_e_{ver}")
-            if e > q:
-                erro_txt = "Há mais erros do que questões."
-            if q > 0:
-                assuntos = " | ".join(topico_sem_prefixo(n) for n in escolhidos)
-                linhas.append((int(ids[escolhidos[0]]), int(q - e), int(e), assuntos))
-            st.caption("Sem a separação por tópico, o resultado entra certinho no desempenho da MATÉRIA "
-                       "(tela 🧠 Análise e ajuste), e a lista de assuntos fica guardada junto. Se depois conseguir "
-                       "separar, apague este lançamento e lance de novo por tópico.")
+        c1, c2 = st.columns(2)
+        q = c1.number_input("Questões feitas (total)", min_value=0, max_value=1000, step=1, key=f"mx_q_{ver}")
+        e = c2.number_input("Erros (total)", min_value=0, max_value=1000, step=1, key=f"mx_e_{ver}")
+        if e > q:
+            erro_txt = "Há mais erros do que questões."
+        if q > 0:
+            assuntos = " | ".join(escolhidos)
+            linhas.append((int(ids[escolhidos[0]]), int(q - e), int(e), assuntos))
+            if e <= q:
+                st.write(f"**{q} questões · {e} erros · {round(100 * (q - e) / q)}% de acerto** em {len(escolhidos)} assunto(s)")
         if erro_txt:
             st.warning(erro_txt)
         if st.button("💾 Salvar bateria", type="primary", key=f"mx_salvar_{ver}"):
@@ -1166,7 +1145,7 @@ def registrar_bateria_mista(conn, df_top, materia_nome):
         data_txt = pd.to_datetime(g["data"].iloc[0]).strftime("%d/%m/%Y")
         with st.expander(f"{data_txt} · {nome} · {a + e} questões · {round(100 * a / max(1, a + e))}% de acerto"):
             if g["assuntos"].iloc[0]:
-                st.write("**Assuntos (só o total foi informado):**")
+                st.write("**Assuntos cobrados:**")
                 st.write("\n".join(f"- {x}" for x in str(g["assuntos"].iloc[0]).split(" | ")))
             else:
                 st.dataframe(pd.DataFrame({"Tópico": g["topico"].map(topico_sem_prefixo),
@@ -3221,7 +3200,7 @@ elif menu == "📝 Registrar Questões":
             df_top = pd.read_sql_query("SELECT id, nome FROM topicos WHERE materia_id = ? ORDER BY COALESCE(semana, 0), COALESCE(dia, 0), COALESCE(ordem, 0), id", conn, params=(int(mat_id),))
             
             modo_reg = st.radio("As questões foram de quantos tópicos?",
-                                ["Um tópico só", "Vários tópicos (bateria / caderno misto)"],
+                                ["Um tópico só", "Vários tópicos (bateria mista)"],
                                 horizontal=True, key="ex_modo")
             if df_top.empty:
                 st.warning("Nenhum tópico cadastrado nesta matéria.")

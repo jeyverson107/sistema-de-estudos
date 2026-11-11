@@ -2209,6 +2209,39 @@ if (rodando) {{
 </script>""", height=130)
 
 
+def botao_copiar(texto, chave, rotulo="📋 Copiar pedido"):
+    """NOVO (11/11/2026): botão grande de copiar, que funciona no celular (toque).
+    Tenta a área de transferência moderna e, se o navegador bloquear, usa o método antigo."""
+    import json as _j
+    import streamlit.components.v1 as components
+    t = _j.dumps(texto)
+    components.html(f"""
+    <button id="b" style="width:100%;padding:14px;font-size:17px;font-weight:600;border:none;border-radius:10px;
+            background:#1F3A5F;color:#fff;cursor:pointer;">{rotulo}</button>
+    <div id="m" style="text-align:center;font-family:sans-serif;font-size:14px;margin-top:6px;color:#2E7D32;"></div>
+    <script>
+    const txt = {t};
+    const b = document.getElementById('b'), m = document.getElementById('m');
+    function antigo() {{
+        const a = document.createElement('textarea'); a.value = txt; a.setAttribute('readonly', '');
+        a.style.position = 'fixed'; a.style.opacity = '0'; document.body.appendChild(a);
+        a.focus(); a.select(); a.setSelectionRange(0, txt.length);
+        let ok = false; try {{ ok = document.execCommand('copy'); }} catch (e) {{}}
+        document.body.removeChild(a); return ok;
+    }}
+    function aviso(ok) {{
+        if (ok) {{ m.style.color = '#2E7D32'; m.textContent = '✅ Copiado! Agora cole na conversa com o Claude.'; b.textContent = '✅ Copiado'; }}
+        else {{ m.style.color = '#9B1C1C'; m.textContent = 'Não consegui copiar sozinho. Abra “Ver o texto do pedido” e copie manualmente.'; }}
+        setTimeout(() => {{ b.textContent = '{rotulo}'; }}, 3000);
+    }}
+    b.addEventListener('click', () => {{
+        if (navigator.clipboard && window.isSecureContext) {{
+            navigator.clipboard.writeText(txt).then(() => aviso(true)).catch(() => aviso(antigo()));
+        }} else {{ aviso(antigo()); }}
+    }});
+    </script>""", height=80)
+
+
 def texto_pedido_caderno(row, orientacao="", anot="", n_questoes=40):
     """NOVO (10/11/2026): monta o texto que o usuário copia e cola no Claude para receber o caderno em PDF."""
     nome = str(row['nome'])
@@ -2320,9 +2353,14 @@ def cartao_bloco(conn, row, meta_id, mostrar_data=False, expandido=None):
         if row['materia'] != RED and st.toggle("📋 Gerar pedido do caderno de questões (PDF)", key=f"cad_tg_{topico_id}"):
             n_q = st.select_slider("Quantidade de questões", options=[10, 20, 30, 40, 50], value=40,
                                    key=f"cad_n_{topico_id}")
-            st.caption("Toque no ícone de copiar (canto da caixa), abra a conversa com o Claude no projeto "
-                       "CONCURSO CBMPE e cole. Ele devolve o PDF com gabarito e comentários no final.")
-            st.code(texto_pedido_caderno(row, orientacao, anot, n_q), language=None)
+            _ped = texto_pedido_caderno(row, orientacao, anot, n_q)
+            botao_copiar(_ped, f"cad_{topico_id}")
+            st.caption("Depois de copiar, abra a conversa com o Claude no projeto CONCURSO CBMPE e cole. "
+                       "Ele devolve o PDF com gabarito e comentários no final.")
+            with st.expander("👀 Ver o texto do pedido"):
+                st.text_area("Pedido", value=_ped, height=220, key=f"cad_txt_{topico_id}_{n_q}",
+                             label_visibility="collapsed",
+                             help="Se o botão não copiar, toque e segure no texto, escolha 'Selecionar tudo' e depois 'Copiar'.")
 
         # NOVO: questões feitas neste bloco (gravadas junto ao concluir, ou no botão próprio)
         versao = st.session_state.get(f"q_ver_{topico_id}", 0)

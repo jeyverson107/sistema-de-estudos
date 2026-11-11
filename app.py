@@ -334,6 +334,11 @@ def init_db():
     colunas_orient = [col[1] for col in c.execute("PRAGMA table_info(orientacoes)").fetchall()]
     if "origem" not in colunas_orient:
         c.execute("ALTER TABLE orientacoes ADD COLUMN origem TEXT DEFAULT 'usuario'")
+    # NOVO (11/11/2026): baterias com vários tópicos (lote = mesma bateria; assuntos = lista quando só se sabe o total)
+    colunas_ex = [col[1] for col in c.execute("PRAGMA table_info(exercicios)").fetchall()]
+    for nome_col in ("lote", "bateria", "assuntos"):
+        if nome_col not in colunas_ex:
+            c.execute(f"ALTER TABLE exercicios ADD COLUMN {nome_col} TEXT")
     # Ajuste de títulos ao edital (só troca o nome; o progresso do bloco é mantido)
     for antigo, novo in (("Estatuto (Lei 6.783): disposições gerais, hierarquia e disciplina",
                           "Estatuto (Lei 6.783): hierarquia e disciplina"),
@@ -1056,6 +1061,126 @@ def salvar_status_topico(conn, topico_id, status, minutos=None):
 # INTERFACE PRINCIPAL
 # -----------------------------------------------------------------------------
 st.title("🛡️ Sistema Unificado de Gestão de Estudos")
+
+
+# -----------------------------------------------------------------------------
+# NOVO (11/11/2026): REGISTRO DE BATERIA COM VÁRIOS TÓPICOS
+# Ex.: caderno do Estatuto, arts. 1º a 48 (vários assuntos na mesma bateria).
+# - Se você sabe os números de cada tópico: grava um registro por tópico (análise por tópico fica exata).
+# - Se só sabe o total: grava UM registro com a lista de tópicos (a análise da MATÉRIA fica exata).
+# -----------------------------------------------------------------------------
+def registrar_bateria_mista(conn, df_top, materia_nome):
+    ver = st.session_state.get("mx_ver", 0)
+    # um item por ASSUNTO (junta "Continuação:" e "Lei seca:" do mesmo assunto; grava no 1º bloco dele)
+    ids = {}
+    for n, tid in zip(df_top['nome'], df_top['id']):
+        base = topico_sem_prefixo(n)
+        for pre in ("Continuação: ", "Lei seca: "):
+            if base.startswith(pre):
+                base = base[len(pre):]
+        ids.setdefault(base, tid)
+    nomes = list(ids)
+    escolhidos = st.multiselect("Marque TODOS os tópicos que caíram na bateria", nomes, key=f"mx_tops_{ver}",
+                                placeholder="Toque aqui e vá marcando os assuntos")
+    nome_bat = st.text_input("Nome da bateria (opcional)", key=f"mx_nome_{ver}",
+                             placeholder="Ex.: Caderno Estatuto arts. 1º a 48")
+    forma = st.radio("Você sabe quantas questões e erros teve em cada tópico?",
+                     ["Sim, separo por tópico", "Não, só sei o total da bateria"], key=f"mx_forma_{ver}")
+    if not escolhidos:
+        st.info("Marque pelo menos um tópico para lançar o resultado.")
+    else:
+        linhas = []  # (topico_id, acertos, erros)
+        erro_txt = ""
+        if forma.startswith("Sim"):
+            base = pd.DataFrame({"Tópico": [topico_sem_prefixo(n) for n in escolhidos],
+                                 "Questões feitas": [0] * len(escolhidos), "Erros": [0] * len(escolhidos)})
+            tab = st.data_editor(base, hide_index=True, use_container_width=True, disabled=["Tópico"],
+                                 key=f"mx_tab_{ver}", column_config={
+                                     "Questões feitas": st.column_config.NumberColumn(min_value=0, max_value=500, step=1),
+                                     "Erros": st.column_config.NumberColumn(min_value=0, max_value=500, step=1)})
+            for n, (_, r) in zip(escolhidos, tab.iterrows()):
+                q = 0 if pd.isna(r["Questões feitas"]) else int(r["Questões feitas"])
+                e = 0 if pd.isna(r["Erros"]) else int(r["Erros"])
+                if e > q:
+                    erro_txt = f"Em \"{topico_sem_prefixo(n)}\" há mais erros do que questões."
+                if q > 0:
+                    linhas.append((int(ids[n]), q - e, e, None))
+            tq = sum(a + e for _, a, e, _ in linhas); te = sum(e for _, _, e, _ in linhas)
+            if tq:
+                st.write(f"**Total da bateria:** {tq} questões · {te} erros · **{round(100 * (tq - te) / tq)}%** de acerto")
+        else:
+            c1, c2 = st.columns(2)
+            q = c1.number_input("Questões feitas (total)", min_value=0, max_value=1000, step=1, key=f"mx_q_{ver}")
+            e = c2.number_input("Erros (total)", min_value=0, max_value=1000, step=1, key=f"mx_e_{ver}")
+            if e > q:
+                erro_txt = "Há mais erros do que questões."
+            if q > 0:
+                assuntos = " | ".join(topico_sem_prefixo(n) for n in escolhidos)
+                linhas.append((int(ids[escolhidos[0]]), int(q - e), int(e), assuntos))
+            st.caption("Sem a separação por tópico, o resultado entra certinho no desempenho da MATÉRIA "
+                       "(tela 🧠 Análise e ajuste), e a lista de assuntos fica guardada junto. Se depois conseguir "
+                       "separar, apague este lançamento e lance de novo por tópico.")
+        if erro_txt:
+            st.warning(erro_txt)
+        if st.button("💾 Salvar bateria", type="primary", key=f"mx_salvar_{ver}"):
+            if erro_txt:
+                avisar("Nada foi salvo: " + erro_txt, "error")
+            elif not linhas:
+                avisar("Nada foi salvo: informe quantas questões fez.", "warning")
+            else:
+                try:
+                    lote = datetime.datetime.now().strftime("%Y%m%d%H%M%S%f")
+                    hoje_txt = hoje_local().isoformat()
+                    for tid, a, e, assuntos in linhas:
+                        conn.execute("INSERT INTO exercicios (data, topico_id, acertos, erros, lote, bateria, assuntos) "
+                                     "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                     (hoje_txt, tid, int(a), int(e), lote, nome_bat.strip() or None, assuntos))
+                    conn.commit()
+                    conf = conn.execute("SELECT COUNT(*), SUM(acertos), SUM(erros) FROM exercicios WHERE lote = ?",
+                                        (lote,)).fetchone()
+                    if conf[0] == len(linhas):
+                        tot = conf[1] + conf[2]
+                        st.session_state["mx_ver"] = ver + 1  # limpa o formulário
+                        avisar(f"Bateria salva e conferida: {conf[1]} acertos e {conf[2]} erros "
+                               f"({round(100 * conf[1] / tot)}%) em {len(escolhidos)} tópico(s).")
+                    else:
+                        avisar("O app não encontrou todos os registros ao conferir. Tente de novo.", "error")
+                except Exception as ex:
+                    avisar(f"NÃO foi salvo. Erro: {ex}", "error")
+            st.rerun()
+
+    # histórico das baterias desta matéria
+    st.markdown("#### 📚 Baterias mistas lançadas nesta matéria")
+    tids = [int(x) for x in df_top['id']]
+    marca = ",".join("?" * len(tids))
+    df_b = pd.read_sql_query(f"""SELECT e.lote, e.data, e.bateria, e.assuntos, t.nome AS topico, e.acertos, e.erros
+                                 FROM exercicios e JOIN topicos t ON e.topico_id = t.id
+                                 WHERE e.lote IS NOT NULL AND e.topico_id IN ({marca}) ORDER BY e.id DESC""",
+                             conn, params=tids)
+    if df_b.empty:
+        st.caption("Nenhuma bateria mista lançada ainda nesta matéria.")
+        return
+    for lote, g in df_b.groupby("lote", sort=False):
+        a, e = int(g["acertos"].sum()), int(g["erros"].sum())
+        nome = g["bateria"].iloc[0] or "Bateria sem nome"
+        data_txt = pd.to_datetime(g["data"].iloc[0]).strftime("%d/%m/%Y")
+        with st.expander(f"{data_txt} · {nome} · {a + e} questões · {round(100 * a / max(1, a + e))}% de acerto"):
+            if g["assuntos"].iloc[0]:
+                st.write("**Assuntos (só o total foi informado):**")
+                st.write("\n".join(f"- {x}" for x in str(g["assuntos"].iloc[0]).split(" | ")))
+            else:
+                st.dataframe(pd.DataFrame({"Tópico": g["topico"].map(topico_sem_prefixo),
+                                           "Acertos": g["acertos"], "Erros": g["erros"]}),
+                             hide_index=True, use_container_width=True)
+            if st.checkbox("Quero apagar esta bateria inteira", key=f"mx_conf_{lote}") and \
+               st.button("🗑️ Apagar bateria", key=f"mx_del_{lote}"):
+                try:
+                    conn.execute("DELETE FROM exercicios WHERE lote = ?", (lote,))
+                    conn.commit()
+                    avisar("Bateria apagada.")
+                except Exception as ex:
+                    avisar(f"NÃO foi apagada. Erro: {ex}", "error")
+                st.rerun()
 
 # -----------------------------------------------------------------------------
 # NOVO: AVISOS DE CONFIRMAÇÃO (não somem quando a tela recarrega)
@@ -3095,8 +3220,13 @@ elif menu == "📝 Registrar Questões":
             
             df_top = pd.read_sql_query("SELECT id, nome FROM topicos WHERE materia_id = ? ORDER BY COALESCE(semana, 0), COALESCE(dia, 0), COALESCE(ordem, 0), id", conn, params=(int(mat_id),))
             
+            modo_reg = st.radio("As questões foram de quantos tópicos?",
+                                ["Um tópico só", "Vários tópicos (bateria / caderno misto)"],
+                                horizontal=True, key="ex_modo")
             if df_top.empty:
                 st.warning("Nenhum tópico cadastrado nesta matéria.")
+            elif modo_reg.startswith("Vários"):
+                registrar_bateria_mista(conn, df_top, mat_sel)
             else:
                 topico_sel = st.selectbox("Selecione o Tópico", df_top['nome'].tolist())
                 topico_id = df_top[df_top['nome'] == topico_sel]['id'].values[0]

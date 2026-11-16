@@ -1069,6 +1069,114 @@ st.title("🛡️ Sistema Unificado de Gestão de Estudos")
 # Marca os assuntos cobrados e informa só o TOTAL de questões e erros: grava UM registro
 # com a lista de assuntos (o desempenho da MATÉRIA fica exato).
 # -----------------------------------------------------------------------------
+# ======================= IMPORTAR RESULTADO DE SIMULADO (16/11/2026) =======================
+def ler_resultado_simulado(texto):
+    """Lê o texto do botão 'Copiar resultado' do simulado e devolve (nome, [(matéria, assunto, acertos, respondidas)])."""
+    nome = "Simulado"
+    m = _re.search(r"RESULTADO\s*[–-]\s*(.+?)\s*\(feito em", texto)
+    if m:
+        nome = m.group(1).strip()
+    linhas, na_secao = [], False
+    for bruta in texto.splitlines():
+        lin = bruta.strip()
+        if lin.upper().startswith("POR ASSUNTO"):
+            na_secao = True
+            continue
+        if na_secao and lin.lower().startswith("questões erradas"):
+            break
+        if not na_secao or not lin.startswith("•"):
+            continue
+        r = _re.match(r"^•\s*(.+?)\s+[–-]\s+(.+):\s*(\d+)\s*/\s*(\d+)\s*(\([^)]*\))?\s*$", lin)
+        if r:
+            linhas.append((r.group(1).strip(), r.group(2).strip(), int(r.group(3)), int(r.group(4))))
+    return nome, linhas
+
+
+def mapa_assuntos_topicos(conn, meta_id):
+    """{matéria: {assunto: topico_id}}, com o 1º bloco estudado de cada assunto (ou o 1º bloco, se nenhum foi estudado)."""
+    df = pd.read_sql_query("""
+        SELECT m.nome AS materia, t.id, t.nome AS topico, t.status
+        FROM topicos t JOIN materias m ON t.materia_id = m.id
+        WHERE m.meta_id = ?
+        ORDER BY CASE WHEN t.status IN ('Concluído', 'Parcial') THEN 0 ELSE 1 END,
+                 COALESCE(t.semana, 0), COALESCE(t.dia, 0), COALESCE(t.ordem, 0), t.id
+    """, conn, params=(int(meta_id),))
+    mapa = {}
+    for _, r in df.iterrows():
+        base = limpar_nome_topico(r["topico"])
+        for a in [x.strip() for x in base.split(" | ") if x.strip()]:
+            mapa.setdefault(r["materia"], {}).setdefault(a, int(r["id"]))
+    return mapa
+
+
+def importar_simulado_ui(conn, meta_id):
+    ver = st.session_state.get("imp_ver", 0)
+    st.write("Termine o simulado, toque em **📋 Copiar resultado** e cole o texto aqui. "
+             "O app separa acertos e erros por matéria e por assunto e lança tudo de uma vez.")
+    texto = st.text_area("Cole aqui o resultado do simulado", height=180, key=f"imp_txt_{ver}",
+                         placeholder="RESULTADO – Simulado 1 CFO CBMPE 2027 (feito em ...)")
+    if not texto.strip():
+        return
+    nome, linhas = ler_resultado_simulado(texto)
+    linhas = [l for l in linhas if l[3] > 0]
+    if not linhas:
+        st.warning("Não encontrei a parte “POR ASSUNTO” com acertos. Confira se colou o texto inteiro do botão "
+                   "“Copiar resultado” e se respondeu pelo menos uma questão.")
+        return
+    nome = st.text_input("Nome do simulado", value=nome, key=f"imp_nome_{ver}")
+    mapa = mapa_assuntos_topicos(conn, meta_id)
+
+    st.markdown("**Confira antes de salvar:**")
+    plano, faltam = [], 0
+    for i, (mat, ass, a, f) in enumerate(linhas):
+        e = f - a
+        opcoes = mapa.get(mat, {})
+        if ass in opcoes:
+            tid = opcoes[ass]
+            st.write(f"✅ **{mat}** – {ass}: {a} acertos, {e} erros")
+        elif not opcoes:
+            st.write(f"⚠️ **{mat}** – {ass}: a matéria não existe neste objetivo; essa linha não será importada.")
+            tid = None
+        else:
+            nomes = ["— não importar —"] + list(opcoes)
+            esc = st.selectbox(f"❓ “{ass}” ({mat}, {a}/{f}) não bateu com nenhum tópico. Em qual tópico lançar?",
+                               nomes, key=f"imp_sel_{ver}_{i}")
+            tid = opcoes.get(esc)
+            if tid is None:
+                faltam += 1
+        if tid is not None:
+            plano.append((tid, a, e, ass, mat))
+
+    tot_a, tot_q = sum(p[1] for p in plano), sum(p[1] + p[2] for p in plano)
+    if tot_q:
+        st.info(f"Serão lançados **{tot_q} questões** ({tot_a} acertos, {tot_q - tot_a} erros, "
+                f"{round(100 * tot_a / tot_q)}%) em {len(plano)} assunto(s)" + (f"; {faltam} linha(s) ficarão de fora." if faltam else "."))
+
+    ja = conn.execute("SELECT COUNT(*) FROM exercicios WHERE bateria = ?", (nome.strip(),)).fetchone()[0]
+    repetir = True
+    if ja:
+        repetir = st.checkbox(f"Já existe um lançamento chamado “{nome.strip()}”. Marque para lançar de novo mesmo assim.",
+                              key=f"imp_rep_{ver}")
+    if st.button("📥 Importar resultado", type="primary", key=f"imp_ok_{ver}", disabled=not plano or not repetir):
+        try:
+            lote = datetime.datetime.now().strftime("%Y%m%d%H%M%S%f")
+            hoje_txt = hoje_local().isoformat()
+            for tid, a, e, ass, _m in plano:
+                conn.execute("INSERT INTO exercicios (data, topico_id, acertos, erros, lote, bateria, assuntos) "
+                             "VALUES (?, ?, ?, ?, ?, ?, ?)", (hoje_txt, int(tid), int(a), int(e), lote, nome.strip(), ass))
+            conn.commit()
+            conf = conn.execute("SELECT COUNT(*), SUM(acertos), SUM(erros) FROM exercicios WHERE lote = ?", (lote,)).fetchone()
+            if conf[0] == len(plano):
+                st.session_state["imp_ver"] = ver + 1
+                avisar(f"Simulado importado e conferido: {conf[1]} acertos e {conf[2]} erros em {conf[0]} assunto(s). "
+                       "Veja o resultado por matéria em 📊 Dashboard de Evolução e 🧠 Análise e ajuste.")
+            else:
+                avisar("O app não encontrou todos os registros ao conferir. Tente de novo.", "error")
+        except Exception as ex:
+            avisar(f"NÃO foi importado. Erro: {ex}", "error")
+        st.rerun()
+
+
 def registrar_bateria_mista(conn, df_top, materia_nome):
     ver = st.session_state.get("mx_ver", 0)
     # um item por ASSUNTO (junta "Continuação:" e "Lei seca:" do mesmo assunto; grava no 1º bloco dele)
@@ -3226,7 +3334,11 @@ elif menu == "📝 Registrar Questões":
     else:
         meta_sel = st.selectbox("Selecione o Objetivo", df_metas['nome'].tolist())
         meta_id = df_metas[df_metas['nome'] == meta_sel]['id'].values[0]
-        
+
+        # NOVO (16/11/2026): importar de uma vez o resultado de um simulado feito com o Claude
+        with st.expander("📥 Importar resultado de simulado (colar o texto do “Copiar resultado”)"):
+            importar_simulado_ui(conn, int(meta_id))
+
         df_mat = pd.read_sql_query("SELECT id, nome FROM materias WHERE meta_id = ?", conn, params=(int(meta_id),))
         
         if df_mat.empty:

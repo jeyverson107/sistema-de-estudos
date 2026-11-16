@@ -1152,9 +1152,22 @@ def importar_simulado_ui(conn, meta_id):
     ver = st.session_state.get("imp_ver", 0)
     st.write("Termine o simulado, toque em **📋 Copiar resultado** e cole o texto aqui. "
              "O resultado fica guardado **à parte** das questões do dia a dia, em 🏁 Meus Simulados.")
-    texto = st.text_area("Cole aqui o resultado do simulado", height=160, key=f"imp_txt_{ver}",
+    texto = st.text_area("1️⃣ Cole aqui o resultado do simulado", height=160, key=f"imp_txt_{ver}",
                          placeholder="RESULTADO – Simulado 1 CFO CBMPE 2027 (feito em ...)")
-    if not texto.strip():
+    st.markdown(f"<style>.st-key-imp_ler_{ver} button{{background:#16a34a;border-color:#16a34a;color:#fff}}"
+                f".st-key-imp_ler_{ver} button:hover{{background:#15803d;border-color:#15803d;color:#fff}}</style>",
+                unsafe_allow_html=True)
+    if st.button("2️⃣ ✅ Ler resultado colado", key=f"imp_ler_{ver}", width="stretch"):
+        if texto.strip():
+            st.session_state[f"imp_lido_{ver}"] = texto
+        else:
+            st.warning("A caixa está vazia. Cole o resultado primeiro e toque de novo no botão verde.")
+    lido = st.session_state.get(f"imp_lido_{ver}")
+    if not lido:
+        st.caption("Depois de colar, toque no botão verde para o app ler o resultado.")
+        return
+    if lido != texto:
+        st.warning("Você mudou o texto depois de ler. Toque de novo no botão verde para o app ler a versão nova.")
         return
     d = ler_resultado_simulado(texto)
     itens = [i for i in d.get("itens", []) if int(i.get("resp", 0)) > 0]

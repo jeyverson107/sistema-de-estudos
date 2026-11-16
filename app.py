@@ -358,6 +358,35 @@ def init_db():
     
     # NOVO: desliga cronômetros esquecidos em blocos já concluídos
     c.execute("DELETE FROM cronometro_estado WHERE topico_id IN (SELECT id FROM topicos WHERE status = 'Concluído')")
+
+    # NOVO (16/11/2026): simulados guardados à parte das questões do dia a dia
+    c.execute('''CREATE TABLE IF NOT EXISTS simulados (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, meta_id INTEGER, nome TEXT, data TEXT,
+                    total_questoes INTEGER, minutos INTEGER, criado_em TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS simulado_itens (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, simulado_id INTEGER, materia TEXT, assunto TEXT,
+                    topico_id INTEGER, acertos INTEGER, respondidas INTEGER,
+                    certeza_acertos INTEGER, certeza_resp INTEGER, chute_acertos INTEGER, chute_resp INTEGER)''')
+    # transfere para as tabelas novas os simulados que tenham sido importados como questões (versão de 16/11)
+    c.execute("SELECT valor FROM configuracoes WHERE chave = 'simulados_migrados_v1'")
+    if not c.fetchone():
+        try:
+            lotes = c.execute("""SELECT e.lote, MIN(e.bateria), MIN(e.data), MIN(m.meta_id) FROM exercicios e
+                                 JOIN topicos t ON e.topico_id = t.id JOIN materias m ON t.materia_id = m.id
+                                 WHERE e.lote IS NOT NULL AND e.bateria LIKE 'Simulado%' GROUP BY e.lote""").fetchall()
+            for lote, nome, data, meta in lotes:
+                c.execute("INSERT INTO simulados (meta_id, nome, data, total_questoes, minutos, criado_em) VALUES (?,?,?,?,?,?)",
+                          (meta, nome, data, None, None, data))
+                sid = c.lastrowid
+                for mat, ass, tid, a, e in c.execute("""SELECT m.nome, e.assuntos, e.topico_id, e.acertos, e.erros
+                                                         FROM exercicios e JOIN topicos t ON e.topico_id = t.id
+                                                         JOIN materias m ON t.materia_id = m.id WHERE e.lote = ?""", (lote,)).fetchall():
+                    c.execute("INSERT INTO simulado_itens (simulado_id, materia, assunto, topico_id, acertos, respondidas) VALUES (?,?,?,?,?,?)",
+                              (sid, mat, ass, tid, a, a + e))
+                c.execute("DELETE FROM exercicios WHERE lote = ?", (lote,))
+            c.execute("INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES ('simulados_migrados_v1', '1')")
+        except Exception:
+            pass
     conn.commit()
     conn.close()
 
@@ -1069,27 +1098,37 @@ st.title("🛡️ Sistema Unificado de Gestão de Estudos")
 # Marca os assuntos cobrados e informa só o TOTAL de questões e erros: grava UM registro
 # com a lista de assuntos (o desempenho da MATÉRIA fica exato).
 # -----------------------------------------------------------------------------
-# ======================= IMPORTAR RESULTADO DE SIMULADO (16/11/2026) =======================
+# ======================= SIMULADOS (16/11/2026) =======================
 def ler_resultado_simulado(texto):
-    """Lê o texto do botão 'Copiar resultado' do simulado e devolve (nome, [(matéria, assunto, acertos, respondidas)])."""
+    """Lê o texto do botão 'Copiar resultado' do simulado.
+    Devolve dict: nome, data, minutos, total, itens=[{m, a, ac, resp, cac, cresp, hac, hresp}]."""
+    import json as _js
+    m = _re.search(r"#DADOS-APP#\s*(\{.*\})\s*$", texto.strip(), flags=_re.S)
+    if m:
+        try:
+            d = _js.loads(m.group(1))
+            if d.get("itens"):
+                return d
+        except Exception:
+            pass
     nome = "Simulado"
     m = _re.search(r"RESULTADO\s*[–-]\s*(.+?)\s*\(feito em", texto)
     if m:
         nome = m.group(1).strip()
-    linhas, na_secao = [], False
+    itens, na_secao = [], False
     for bruta in texto.splitlines():
         lin = bruta.strip()
         if lin.upper().startswith("POR ASSUNTO"):
             na_secao = True
             continue
-        if na_secao and lin.lower().startswith("questões erradas"):
+        if na_secao and (lin.lower().startswith("questões erradas") or lin.upper().startswith("CERTEZA")):
             break
         if not na_secao or not lin.startswith("•"):
             continue
         r = _re.match(r"^•\s*(.+?)\s+[–-]\s+(.+):\s*(\d+)\s*/\s*(\d+)\s*(\([^)]*\))?\s*$", lin)
         if r:
-            linhas.append((r.group(1).strip(), r.group(2).strip(), int(r.group(3)), int(r.group(4))))
-    return nome, linhas
+            itens.append({"m": r.group(1).strip(), "a": r.group(2).strip(), "ac": int(r.group(3)), "resp": int(r.group(4))})
+    return {"nome": nome, "data": None, "minutos": None, "total": None, "itens": itens}
 
 
 def mapa_assuntos_topicos(conn, meta_id):
@@ -1112,69 +1151,74 @@ def mapa_assuntos_topicos(conn, meta_id):
 def importar_simulado_ui(conn, meta_id):
     ver = st.session_state.get("imp_ver", 0)
     st.write("Termine o simulado, toque em **📋 Copiar resultado** e cole o texto aqui. "
-             "O app separa acertos e erros por matéria e por assunto e lança tudo de uma vez.")
-    texto = st.text_area("Cole aqui o resultado do simulado", height=180, key=f"imp_txt_{ver}",
+             "O resultado fica guardado **à parte** das questões do dia a dia, em 🏁 Meus Simulados.")
+    texto = st.text_area("Cole aqui o resultado do simulado", height=160, key=f"imp_txt_{ver}",
                          placeholder="RESULTADO – Simulado 1 CFO CBMPE 2027 (feito em ...)")
     if not texto.strip():
         return
-    nome, linhas = ler_resultado_simulado(texto)
-    linhas = [l for l in linhas if l[3] > 0]
-    if not linhas:
+    d = ler_resultado_simulado(texto)
+    itens = [i for i in d.get("itens", []) if int(i.get("resp", 0)) > 0]
+    if not itens:
         st.warning("Não encontrei a parte “POR ASSUNTO” com acertos. Confira se colou o texto inteiro do botão "
                    "“Copiar resultado” e se respondeu pelo menos uma questão.")
         return
-    nome = st.text_input("Nome do simulado", value=nome, key=f"imp_nome_{ver}")
+    nome = st.text_input("Nome do simulado", value=d.get("nome") or "Simulado", key=f"imp_nome_{ver}")
     mapa = mapa_assuntos_topicos(conn, meta_id)
-
     st.markdown("**Confira antes de salvar:**")
-    plano, faltam = [], 0
-    for i, (mat, ass, a, f) in enumerate(linhas):
-        e = f - a
+    plano = []
+    for k, it in enumerate(itens):
+        mat, ass, ac, resp = it["m"], it["a"], int(it["ac"]), int(it["resp"])
         opcoes = mapa.get(mat, {})
-        if ass in opcoes:
-            tid = opcoes[ass]
-            st.write(f"✅ **{mat}** – {ass}: {a} acertos, {e} erros")
-        elif not opcoes:
-            st.write(f"⚠️ **{mat}** – {ass}: a matéria não existe neste objetivo; essa linha não será importada.")
-            tid = None
-        else:
-            nomes = ["— não importar —"] + list(opcoes)
-            esc = st.selectbox(f"❓ “{ass}” ({mat}, {a}/{f}) não bateu com nenhum tópico. Em qual tópico lançar?",
-                               nomes, key=f"imp_sel_{ver}_{i}")
+        tid = opcoes.get(ass)
+        if tid:
+            st.write(f"✅ **{mat}** – {ass}: {ac}/{resp}")
+        elif opcoes:
+            esc = st.selectbox(f"❓ “{ass}” ({mat}, {ac}/{resp}) não bateu com um tópico. Ligar a qual? "
+                               "(o resultado entra mesmo sem ligar)", ["— sem tópico —"] + list(opcoes), key=f"imp_sel_{ver}_{k}")
             tid = opcoes.get(esc)
-            if tid is None:
-                faltam += 1
-        if tid is not None:
-            plano.append((tid, a, e, ass, mat))
-
-    tot_a, tot_q = sum(p[1] for p in plano), sum(p[1] + p[2] for p in plano)
-    if tot_q:
-        st.info(f"Serão lançados **{tot_q} questões** ({tot_a} acertos, {tot_q - tot_a} erros, "
-                f"{round(100 * tot_a / tot_q)}%) em {len(plano)} assunto(s)" + (f"; {faltam} linha(s) ficarão de fora." if faltam else "."))
-
-    ja = conn.execute("SELECT COUNT(*) FROM exercicios WHERE bateria = ?", (nome.strip(),)).fetchone()[0]
+        else:
+            st.write(f"⚠️ **{mat}** – {ass}: {ac}/{resp} (matéria não encontrada neste objetivo; entra sem tópico)")
+        plano.append((mat, ass, tid, ac, resp, it.get("cac"), it.get("cresp"), it.get("hac"), it.get("hresp")))
+    tot_a, tot_r = sum(p[3] for p in plano), sum(p[4] for p in plano)
+    st.info(f"**{nome}**: {tot_a} acertos em {tot_r} questões respondidas ({round(100 * tot_a / tot_r)}%)"
+            + (f" · {d['minutos']} min" if d.get("minutos") else ""))
+    ja = conn.execute("SELECT COUNT(*) FROM simulados WHERE meta_id = ? AND nome = ?", (int(meta_id), nome.strip())).fetchone()[0]
     repetir = True
     if ja:
-        repetir = st.checkbox(f"Já existe um lançamento chamado “{nome.strip()}”. Marque para lançar de novo mesmo assim.",
+        repetir = st.checkbox(f"Já existe um simulado chamado “{nome.strip()}”. Marque para salvar de novo mesmo assim.",
                               key=f"imp_rep_{ver}")
-    if st.button("📥 Importar resultado", type="primary", key=f"imp_ok_{ver}", disabled=not plano or not repetir):
+    if st.button("📥 Salvar simulado", type="primary", key=f"imp_ok_{ver}", disabled=not repetir):
         try:
-            lote = datetime.datetime.now().strftime("%Y%m%d%H%M%S%f")
-            hoje_txt = hoje_local().isoformat()
-            for tid, a, e, ass, _m in plano:
-                conn.execute("INSERT INTO exercicios (data, topico_id, acertos, erros, lote, bateria, assuntos) "
-                             "VALUES (?, ?, ?, ?, ?, ?, ?)", (hoje_txt, int(tid), int(a), int(e), lote, nome.strip(), ass))
+            data_s = d.get("data") or hoje_local().isoformat()
+            cur = conn.execute("INSERT INTO simulados (meta_id, nome, data, total_questoes, minutos, criado_em) VALUES (?,?,?,?,?,?)",
+                               (int(meta_id), nome.strip(), data_s, d.get("total"), d.get("minutos"),
+                                datetime.datetime.now().isoformat(timespec="seconds")))
+            sid = cur.lastrowid
+            for mat, ass, tid, ac, resp, cac, cresp, hac, hresp in plano:
+                conn.execute("""INSERT INTO simulado_itens (simulado_id, materia, assunto, topico_id, acertos, respondidas,
+                                certeza_acertos, certeza_resp, chute_acertos, chute_resp) VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                             (sid, mat, ass, tid, ac, resp, cac, cresp, hac, hresp))
             conn.commit()
-            conf = conn.execute("SELECT COUNT(*), SUM(acertos), SUM(erros) FROM exercicios WHERE lote = ?", (lote,)).fetchone()
+            conf = conn.execute("SELECT COUNT(*), SUM(acertos), SUM(respondidas) FROM simulado_itens WHERE simulado_id = ?", (sid,)).fetchone()
             if conf[0] == len(plano):
                 st.session_state["imp_ver"] = ver + 1
-                avisar(f"Simulado importado e conferido: {conf[1]} acertos e {conf[2]} erros em {conf[0]} assunto(s). "
-                       "Veja o resultado por matéria em 📊 Dashboard de Evolução e 🧠 Análise e ajuste.")
+                avisar(f"Simulado salvo e conferido: {conf[1]} acertos em {conf[2]} questões. Veja a análise em 🏁 Meus Simulados.")
             else:
-                avisar("O app não encontrou todos os registros ao conferir. Tente de novo.", "error")
+                avisar("O app não encontrou todos os itens ao conferir. Tente de novo.", "error")
         except Exception as ex:
-            avisar(f"NÃO foi importado. Erro: {ex}", "error")
+            avisar(f"NÃO foi salvo. Erro: {ex}", "error")
         st.rerun()
+
+
+def dados_simulados(conn, meta_id):
+    """(simulados, itens) do objetivo, em ordem cronológica."""
+    sims = pd.read_sql_query("SELECT * FROM simulados WHERE meta_id = ? ORDER BY data, id", conn, params=(int(meta_id),))
+    if sims.empty:
+        return sims, pd.DataFrame()
+    marca = ",".join("?" * len(sims))
+    itens = pd.read_sql_query(f"SELECT * FROM simulado_itens WHERE simulado_id IN ({marca})", conn,
+                              params=[int(x) for x in sims["id"]])
+    return sims, itens
 
 
 def registrar_bateria_mista(conn, df_top, materia_nome):
@@ -1930,6 +1974,14 @@ def analise_desempenho(conn, meta_id, hoje=None, cfg=None):
                               WHERE m.meta_id = ? AND t.semana IS NOT NULL""", conn, params=(int(meta_id),))
     bl["idx"] = (bl["semana"] - 1) * 7 + bl["dia"]
     corte14 = (hoje - datetime.timedelta(days=14)).isoformat()
+    sim_ult = {}
+    try:  # acertos nos 3 últimos simulados, por matéria
+        for mat_s, sa_, sn_ in conn.execute("""SELECT si.materia, SUM(si.acertos), SUM(si.respondidas) FROM simulado_itens si
+                WHERE si.simulado_id IN (SELECT id FROM simulados WHERE meta_id = ? ORDER BY data DESC, id DESC LIMIT 3)
+                GROUP BY si.materia""", (int(meta_id),)).fetchall():
+            sim_ult[mat_s] = (int(sa_ or 0), int(sn_ or 0))
+    except Exception:
+        pass
     linhas = []
     for materia, q in cfg["questoes"].items():
         e = ex[ex["materia"] == materia]
@@ -1938,12 +1990,16 @@ def analise_desempenho(conn, meta_id, hoje=None, cfg=None):
         a14, n14 = int(e14["acertos"].sum()), int(e14["acertos"].sum() + e14["erros"].sum())
         # com 20+ questões vale o acerto real; com menos, suaviza em direção a 50% (pouco dado engana)
         est = (a / n) if n >= MIN_QUESTOES_CONFIAVEL else (a + 0.5 * PESO_NEUTRO) / (n + PESO_NEUTRO)
+        # NOVO (16/11/2026): os simulados (sem consulta) são o termômetro principal quando existem
+        sa, sn = sim_ult.get(materia, (0, 0))
+        if sn >= 5:
+            est = 0.6 * ((sa + 2.5) / (sn + 5)) + 0.4 * est
         b = bl[bl["materia"] == materia]
         concl = int((b["status"] == "Concluído").sum())
         previstos = int((b["idx"] < hoje_idx).sum())
         if n == 0 and concl == 0:
             situacao = "⏳ ainda não começou"
-        elif n < MIN_QUESTOES_CONFIAVEL:
+        elif n + sim_ult.get(materia, (0, 0))[1] < MIN_QUESTOES_CONFIAVEL:
             situacao = "⚪ pouco dado"
         elif est >= 0.80:
             situacao = "🟢 forte: pode aliviar"
@@ -1955,7 +2011,8 @@ def analise_desempenho(conn, meta_id, hoje=None, cfg=None):
                        "pct": (a / n) if n else None, "pct_14d": (a14 / n14) if n14 >= 10 else None,
                        "estimativa": est, "pontos": q * est, "ganho": q * (1 - est),
                        "blocos_concluidos": concl, "blocos_total": len(b), "blocos_previstos": previstos,
-                       "situacao": situacao})
+                       "situacao": situacao, "sim_feitas": sim_ult.get(materia, (0, 0))[1],
+                       "pct_sim": (sa / sn) if sn else None})
     return pd.DataFrame(linhas)
 
 def ritmo_cronograma(conn, meta_id, hoje=None):
@@ -2715,6 +2772,7 @@ menu = st.sidebar.radio("Navegação", [
     "🧭 Planejar Estudos",
     "🗓️ Cronograma Semanal",
     "🎯 Simulado do que já estudei",
+    "🏁 Meus Simulados",
     "📝 Registrar Questões", 
     "✍️ Redações",
     "📊 Dashboard de Evolução", 
@@ -3324,6 +3382,193 @@ elif menu == "🎯 Simulado do que já estudei":
             st.download_button("⬇️ Baixar o pedido (.txt)", data=pedido,
                                file_name=f"pedido_simulado_{hoje_local():%Y-%m-%d}.txt", mime="text/plain")
 
+elif menu == "🏁 Meus Simulados":
+    import altair as alt
+    st.header("🏁 Meus Simulados")
+    st.caption("Só entram aqui os simulados, feitos sem consulta. As questões do dia a dia continuam em "
+               "📊 Dashboard de Evolução, separadas.")
+    df_metas = pd.read_sql_query("SELECT id, nome FROM metas WHERE ativa = 1", conn)
+    if df_metas.empty:
+        st.info("Nenhum objetivo cadastrado ainda.")
+    else:
+        meta_s = st.selectbox("Objetivo", df_metas["nome"].tolist()) if len(df_metas) > 1 else df_metas["nome"].iloc[0]
+        meta_s_id = int(df_metas[df_metas["nome"] == meta_s]["id"].values[0])
+        sims, itens = dados_simulados(conn, meta_s_id)
+        with st.expander("📥 Lançar um simulado (colar o texto do “Copiar resultado”)", expanded=sims.empty):
+            importar_simulado_ui(conn, meta_s_id)
+
+        if sims.empty or itens.empty:
+            st.info("Nenhum simulado lançado ainda. Faça o simulado com o Claude, toque em “📋 Copiar resultado” "
+                    "e cole no quadro acima.")
+        else:
+            COR_RUIM, COR_MEDIO, COR_BOM, AZUL = "#d03b3b", "#fab219", "#0ca30c", "#256abf"
+            def emo(p, n):
+                if p is None or n == 0:
+                    return "–"
+                return ("🔴 " if p < 0.5 else "🟡 " if p < 0.75 else "🟢 ") + f"{p:.0%}"
+
+            g = itens.groupby("simulado_id")[["acertos", "respondidas"]].sum()
+            sims = sims.merge(g, left_on="id", right_index=True, how="left").fillna({"acertos": 0, "respondidas": 0})
+            sims["pct"] = sims["acertos"] / sims["respondidas"].where(sims["respondidas"] > 0)
+            sims["n"] = range(1, len(sims) + 1)
+            sims["rotulo"] = [f"S{k} · {pd.to_datetime(dt).strftime('%d/%m')}" for k, dt in zip(sims["n"], sims["data"])]
+            ult = sims.iloc[-1]
+            ant = sims.iloc[-2] if len(sims) > 1 else None
+
+            # ---------- nota projetada (último dado de cada matéria) ----------
+            cfg = config_prova(conn, meta_s_id)
+            ordem = {sid: k for k, sid in enumerate(sims["id"])}
+            itens["ordem"] = itens["simulado_id"].map(ordem)
+            pm = itens.groupby(["materia", "ordem"])[["acertos", "respondidas"]].sum().reset_index()
+            ult_mat = pm[pm["respondidas"] > 0].sort_values("ordem").groupby("materia").tail(1).set_index("materia")
+            pts, possiveis, sem_dado = 0.0, 0.0, []
+            if cfg:
+                for mat, q in cfg["questoes"].items():
+                    if mat in ult_mat.index:
+                        r = ult_mat.loc[mat]
+                        pts += q * r["acertos"] / r["respondidas"]
+                        possiveis += q
+                    else:
+                        sem_dado.append(mat)
+
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Último simulado", f"{ult['pct']:.0%}" if pd.notna(ult["pct"]) else "–",
+                      delta=(f"{(ult['pct'] - ant['pct']) * 100:+.0f} pontos percentuais" if ant is not None and pd.notna(ant["pct"]) else None))
+            c2.metric("Simulados feitos", len(sims))
+            if cfg and possiveis:
+                c3.metric("Nota projetada", f"{pts:.1f} de {possiveis:.0f}",
+                          help="Usa o último resultado de cada matéria nos simulados, com o número de questões dela na prova.")
+            if cfg and possiveis:
+                tot_prova = sum(cfg["questoes"].values())
+                st.caption(f"Nota projetada só nas matérias que já caíram em simulado ({possiveis:.0f} das {tot_prova:.0f} questões da prova)."
+                           + (f" Ainda sem simulado: {', '.join(sem_dado)}." if sem_dado else ""))
+                if cfg.get("blocos") and cfg.get("min_bloco_pct"):
+                    for bloco, mats in cfg["blocos"].items():
+                        qs = [m for m in mats if m in ult_mat.index]
+                        if not qs:
+                            continue
+                        pb = sum(cfg["questoes"][m] * ult_mat.loc[m, "acertos"] / ult_mat.loc[m, "respondidas"] for m in qs)
+                        qb = sum(cfg["questoes"][m] for m in qs)
+                        if pb / qb < cfg["min_bloco_pct"]:
+                            st.error(f"⚠️ {bloco}: {pb / qb:.0%} nas matérias avaliadas, abaixo do mínimo de "
+                                     f"{cfg['min_bloco_pct']:.0%} do edital. É o ponto mais urgente.")
+                zeradas = [m for m in ult_mat.index if ult_mat.loc[m, "acertos"] == 0 and m in cfg["questoes"]]
+                if zeradas and cfg.get("zerar"):
+                    st.error("⚠️ Zerou no último simulado: " + ", ".join(zeradas) + ". No edital, zerar uma matéria elimina.")
+
+            # ---------- evolução ----------
+            st.subheader("📈 Evolução geral")
+            graf = sims.dropna(subset=["pct"]).assign(pct100=lambda d: d["pct"] * 100)
+            linha = alt.Chart(graf).mark_line(point=alt.OverlayMarkDef(size=80), color=AZUL, strokeWidth=3).encode(
+                x=alt.X("rotulo:N", sort=list(graf["rotulo"]), title=None, axis=alt.Axis(labelAngle=0)),
+                y=alt.Y("pct100:Q", title="% de acerto", scale=alt.Scale(domain=[0, 100])),
+                tooltip=[alt.Tooltip("nome:N", title="Simulado"), alt.Tooltip("pct100:Q", title="% de acerto", format=".0f"),
+                         alt.Tooltip("acertos:Q", title="Acertos"), alt.Tooltip("respondidas:Q", title="Respondidas")])
+            ref = alt.Chart(pd.DataFrame({"y": [75]})).mark_rule(color=COR_BOM, strokeDash=[5, 4]).encode(y="y:Q")
+            st.altair_chart(linha + ref, use_container_width=True)
+            st.caption("Linha verde tracejada = 75%, a faixa “forte”.")
+
+            # ---------- por matéria ----------
+            st.subheader("📚 Por matéria em cada simulado")
+            pm["pct"] = pm["acertos"] / pm["respondidas"].where(pm["respondidas"] > 0)
+            rot = dict(zip(range(len(sims)), sims["rotulo"]))
+            tab = {}
+            for mat, grp in pm.groupby("materia"):
+                linha_m = {"Matéria": mat}
+                for _, r in grp.iterrows():
+                    linha_m[rot[r["ordem"]]] = emo(r["pct"], r["respondidas"])
+                validos = grp[grp["respondidas"] > 0].sort_values("ordem")
+                if len(validos) >= 2:
+                    dif = (validos.iloc[-1]["pct"] - validos.iloc[-2]["pct"]) * 100
+                    linha_m["Tendência"] = ("↗️ " if dif >= 5 else "↘️ " if dif <= -5 else "➡️ ") + f"{dif:+.0f} p.p."
+                else:
+                    linha_m["Tendência"] = "– (1 simulado)"
+                tot_a, tot_r = validos["acertos"].sum(), validos["respondidas"].sum()
+                linha_m["Geral"] = emo(tot_a / tot_r if tot_r else None, tot_r)
+                linha_m["Questões"] = int(tot_r)
+                tab[mat] = linha_m
+            df_tab = pd.DataFrame(list(tab.values()))
+            colunas = ["Matéria"] + list(sims["rotulo"]) + ["Geral", "Tendência", "Questões"]
+            st.dataframe(df_tab.reindex(columns=[c for c in colunas if c in df_tab.columns]).fillna("–"),
+                         use_container_width=True, hide_index=True)
+            st.caption("🔴 abaixo de 50% · 🟡 de 50% a 74% · 🟢 75% ou mais. Tendência = último simulado comparado ao anterior.")
+
+            # ---------- estudo × simulado ----------
+            st.subheader("🔍 Estudo × simulado")
+            st.caption("Compara o seu acerto nas questões do dia a dia (com material à mão) com o acerto nos simulados (sem consulta). "
+                       "Se cai muito no simulado, o assunto ainda não está firme: precisa de revisão, não de matéria nova.")
+            ex = pd.read_sql_query("""SELECT m.nome AS materia, SUM(e.acertos) AS a, SUM(e.acertos + e.erros) AS n
+                                      FROM exercicios e JOIN topicos t ON e.topico_id = t.id JOIN materias m ON t.materia_id = m.id
+                                      WHERE m.meta_id = ? GROUP BY m.nome""", conn, params=(meta_s_id,)).set_index("materia")
+            sm = itens.groupby("materia")[["acertos", "respondidas"]].sum()
+            comp = []
+            for mat, r in sm.iterrows():
+                if r["respondidas"] == 0:
+                    continue
+                ps = r["acertos"] / r["respondidas"]
+                pe = (ex.loc[mat, "a"] / ex.loc[mat, "n"]) if mat in ex.index and ex.loc[mat, "n"] else None
+                ne = int(ex.loc[mat, "n"]) if mat in ex.index else 0
+                if pe is None or ne < 10:
+                    leitura = "⚪ pouca questão no dia a dia para comparar"
+                elif r["respondidas"] < 5:
+                    leitura = "⚪ pouca questão no simulado para comparar"
+                elif pe - ps >= 0.15:
+                    leitura = "⚠️ aprendizado frágil: revisar"
+                elif ps - pe >= 0.10:
+                    leitura = "🟢 rende mais sem consulta"
+                else:
+                    leitura = "✅ coerente"
+                comp.append({"Matéria": mat, "Dia a dia": f"{pe:.0%} ({ne} q.)" if pe is not None else "–",
+                             "Simulados": f"{ps:.0%} ({int(r['respondidas'])} q.)",
+                             "Diferença": f"{(ps - pe) * 100:+.0f} p.p." if pe is not None else "–", "Leitura": leitura})
+            st.dataframe(pd.DataFrame(comp), use_container_width=True, hide_index=True)
+
+            # ---------- certeza ----------
+            com_cert = itens.dropna(subset=["certeza_resp"])
+            if not com_cert.empty and com_cert["certeza_resp"].sum() + com_cert["chute_resp"].fillna(0).sum() > 0:
+                st.subheader("🎯 Certeza nas respostas")
+                ca, cr = int(com_cert["certeza_acertos"].sum()), int(com_cert["certeza_resp"].sum())
+                ha, hr = int(com_cert["chute_acertos"].fillna(0).sum()), int(com_cert["chute_resp"].fillna(0).sum())
+                k1, k2, k3 = st.columns(3)
+                k1.metric("Acerto quando teve certeza", f"{ca / cr:.0%}" if cr else "–", help=f"{ca} de {cr}")
+                k2.metric("Acertos no chute", ha, help=f"de {hr} chutes")
+                tot_ac = int(com_cert["acertos"].sum())
+                k3.metric("Acerto “firme”", f"{(tot_ac - ha) / int(com_cert['respondidas'].sum()):.0%}",
+                          help="Acertos descontando os que foram chute.")
+                if cr and ca / cr < 0.85:
+                    st.warning("Você errou várias questões em que marcou “certeza”. Isso indica conceito aprendido errado: "
+                               "vale reler a lei ou a teoria desses assuntos, e não só fazer mais questões.")
+                cm = com_cert.groupby("materia")[["certeza_acertos", "certeza_resp", "chute_acertos", "chute_resp"]].sum()
+                st.dataframe(pd.DataFrame([{"Matéria": m, "Acerto com certeza": f"{r['certeza_acertos'] / r['certeza_resp']:.0%} ({int(r['certeza_resp'])} q.)" if r["certeza_resp"] else "–",
+                                            "Acertos no chute": f"{int(r['chute_acertos'])} de {int(r['chute_resp'])}"}
+                                           for m, r in cm.iterrows()]), use_container_width=True, hide_index=True)
+
+            # ---------- assuntos ----------
+            st.subheader("📝 Assuntos para revisar primeiro")
+            pa = itens.groupby(["materia", "assunto"])[["acertos", "respondidas"]].sum().reset_index()
+            pa = pa[pa["respondidas"] >= 2]
+            if pa.empty:
+                st.caption("Ainda não há assuntos com 2 ou mais questões nos simulados.")
+            else:
+                pa["pct"] = pa["acertos"] / pa["respondidas"]
+                pa["erros"] = pa["respondidas"] - pa["acertos"]
+                pa = pa.sort_values(["pct", "erros"], ascending=[True, False]).head(10)
+                st.dataframe(pd.DataFrame({"Matéria": pa["materia"], "Assunto": pa["assunto"],
+                                           "Acerto": [emo(p, n) for p, n in zip(pa["pct"], pa["respondidas"])],
+                                           "Erros": pa["erros"].astype(int), "Questões": pa["respondidas"].astype(int)}),
+                             use_container_width=True, hide_index=True)
+
+            # ---------- gerenciar ----------
+            with st.expander("🗑️ Apagar um simulado lançado errado"):
+                opc = {f"{r['rotulo']} – {r['nome']}": int(r["id"]) for _, r in sims.iterrows()}
+                esc = st.selectbox("Simulado", list(opc), key="sim_apagar_sel")
+                if st.button("Apagar este simulado", key="sim_apagar_btn"):
+                    conn.execute("DELETE FROM simulado_itens WHERE simulado_id = ?", (opc[esc],))
+                    conn.execute("DELETE FROM simulados WHERE id = ?", (opc[esc],))
+                    conn.commit()
+                    avisar(f"Simulado apagado: {esc}.")
+                    st.rerun()
+
 elif menu == "📝 Registrar Questões":
     st.header("📝 Registro de Desempenho em Exercícios")
     
@@ -3335,9 +3580,7 @@ elif menu == "📝 Registrar Questões":
         meta_sel = st.selectbox("Selecione o Objetivo", df_metas['nome'].tolist())
         meta_id = df_metas[df_metas['nome'] == meta_sel]['id'].values[0]
 
-        # NOVO (16/11/2026): importar de uma vez o resultado de um simulado feito com o Claude
-        with st.expander("📥 Importar resultado de simulado (colar o texto do “Copiar resultado”)"):
-            importar_simulado_ui(conn, int(meta_id))
+        st.caption("Resultado de simulado não entra aqui: lance em 🏁 Meus Simulados, que acompanha os simulados à parte.")
 
         df_mat = pd.read_sql_query("SELECT id, nome FROM materias WHERE meta_id = ?", conn, params=(int(meta_id),))
         
@@ -3895,6 +4138,8 @@ elif menu == "🧠 Análise e ajuste":
         ritmo = ritmo_cronograma(conn, meta_an)
         total_feitas = int(df["feitas"].sum())
 
+        st.caption("🏁 Quando há simulados lançados, eles pesam 60% na estimativa de cada matéria (são o melhor termômetro "
+                   "do dia da prova); as questões do dia a dia pesam 40%. Detalhes em 🏁 Meus Simulados.")
         st.caption("Como funciona: o app cruza as questões que você registra (acertos e erros) com o peso de cada matéria "
                    f"na prova ({cfg_an['fonte']}: toda questão vale 1 ponto). Com poucas questões, a estatística engana; "
                    f"por isso o app só diz \"reforçar\" ou \"aliviar\" a partir de {MIN_QUESTOES_CONFIAVEL} questões numa matéria.")

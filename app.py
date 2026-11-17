@@ -324,7 +324,9 @@ def init_db():
         "bloco": "TEXT",                  # Bloco 1, Bloco 2, Bloco 3
         "minutos_planejados": "INTEGER",  # duração prevista
         "minutos_estudados": "INTEGER DEFAULT 0",
-        "anotacao": "TEXT"                # NOVO (01/11/2026): onde parei / observação do bloco
+        "anotacao": "TEXT",               # NOVO (01/11/2026): onde parei / observação do bloco
+        "estudado": "TEXT",               # NOVO (17/11/2026): o que estudei de fato (registro com data)
+        "analise_ia": "TEXT"              # NOVO (17/11/2026): última análise da IA (Gemini) sobre o bloco
     }
     for nome_col, tipo_col in novas_colunas.items():
         if nome_col not in colunas_existentes:
@@ -2484,7 +2486,101 @@ def botao_copiar(texto, chave, rotulo="📋 Copiar pedido"):
     </script>""", height=80)
 
 
-def texto_pedido_caderno(row, orientacao="", anot="", n_questoes=40):
+# -----------------------------------------------------------------------------
+# NOVO (17/11/2026): "O que estudei neste bloco" + análise da IA (Gemini)
+# A chave fica nos Secrets do Streamlit, igual ao app do TAF: GEMINI_API_KEY (e, opcional, GEMINI_MODEL).
+# -----------------------------------------------------------------------------
+def _gemini_cfg():
+    """(chave, modelo) ou (None, None). Aceita a chave no topo dos Secrets ou dentro de uma seção (ex.: [nuvem])."""
+    try:
+        chave = st.secrets.get("GEMINI_API_KEY")
+        modelo = st.secrets.get("GEMINI_MODEL")
+        if not chave:
+            for sec in st.secrets.values():
+                if hasattr(sec, "get") and sec.get("GEMINI_API_KEY"):
+                    chave, modelo = sec.get("GEMINI_API_KEY"), modelo or sec.get("GEMINI_MODEL")
+                    break
+    except Exception:
+        return None, None
+    return (str(chave).strip(), str(modelo or "gemini-3.6-flash").strip()) if chave else (None, None)
+
+def gemini_texto(prompt):
+    """Manda o pedido ao Gemini e devolve o texto da resposta (ou levanta erro com explicação simples)."""
+    chave, modelo = _gemini_cfg()
+    if not chave:
+        raise RuntimeError("a chave GEMINI_API_KEY não está nos Secrets do Streamlit")
+    r = _req.post(f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent",
+                  params={"key": chave}, timeout=90,
+                  json={"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"temperature": 0.3}})
+    if r.status_code == 404:
+        raise RuntimeError(f"o modelo '{modelo}' não foi encontrado. Ajuste GEMINI_MODEL nos Secrets")
+    if r.status_code == 429:
+        raise RuntimeError("limite de uso do Gemini atingido. Tente de novo daqui a alguns minutos")
+    if r.status_code in (400, 401, 403):
+        raise RuntimeError(f"o Google recusou o pedido ({r.status_code}). Confira se a GEMINI_API_KEY está correta")
+    if r.status_code >= 400:
+        raise RuntimeError(f"erro {r.status_code} do Gemini: {r.text[:150]}")
+    try:
+        return "".join(p.get("text", "") for p in r.json()["candidates"][0]["content"]["parts"]).strip()
+    except Exception:
+        raise RuntimeError("a IA respondeu num formato inesperado. Tente de novo")
+
+def registrar_estudado(conn, topico_id, texto):
+    """Acrescenta ao registro do bloco: 'dd/mm: texto'. Devolve True se gravou."""
+    texto = (texto or "").strip()
+    if not texto:
+        return False
+    atual = conn.execute("SELECT estudado FROM topicos WHERE id = ?", (int(topico_id),)).fetchone()
+    atual = (atual[0] or "").strip() if atual else ""
+    novo = (atual + "\n" if atual else "") + f"{hoje_local():%d/%m}: {texto}"
+    conn.execute("UPDATE topicos SET estudado = ? WHERE id = ?", (novo, int(topico_id)))
+    conn.commit()
+    return True
+
+def estudado_na_materia(conn, topico_id, limite=4):
+    """Anotações de 'o que estudei' dos OUTROS blocos da mesma matéria (os mais recentes primeiro)."""
+    return conn.execute("""SELECT t2.nome, t2.estudado FROM topicos t1 JOIN topicos t2 ON t2.materia_id = t1.materia_id
+                           WHERE t1.id = ? AND t2.id != t1.id AND COALESCE(TRIM(t2.estudado), '') != ''
+                           ORDER BY t2.semana DESC, t2.dia DESC, t2.ordem DESC LIMIT ?""",
+                        (int(topico_id), limite)).fetchall()
+
+def proximos_da_materia(conn, topico_id, limite=4):
+    return [topico_sem_prefixo(n) for (n,) in conn.execute(
+        """SELECT t2.nome FROM topicos t1 JOIN topicos t2 ON t2.materia_id = t1.materia_id
+           WHERE t1.id = ? AND t2.id != t1.id AND t2.status != 'Concluído' AND t2.semana IS NOT NULL
+             AND (t2.semana > t1.semana OR (t2.semana = t1.semana AND (t2.dia > t1.dia OR (t2.dia = t1.dia AND t2.ordem > t1.ordem))))
+           ORDER BY t2.semana, t2.dia, t2.ordem LIMIT ?""", (int(topico_id), limite))]
+
+def prompt_analise_bloco(conn, row, orientacao, estudado):
+    outros = estudado_na_materia(conn, row['id'])
+    proximos = proximos_da_materia(conn, row['id'])
+    return f"""Você é um professor experiente em preparação para concursos, especialista na banca Instituto AOCP.
+O aluno se prepara para a prova de Oficial do Corpo de Bombeiros Militar de Pernambuco (CFO CBMPE, prova em 28/02/2027).
+
+Matéria: {row['materia']}
+Conteúdo previsto para este bloco (vem do edital): {topico_sem_prefixo(row['nome'])}
+Orientação do bloco: {orientacao.strip() or 'nenhuma'}
+Tempo previsto: {int(row['minutos_planejados'] or 0)} min · já registrados: {int(row['minutos_estudados'] or 0)} min · status: {row['status']}
+
+O que o aluno escreveu que estudou NESTE bloco:
+{estudado.strip() or '(nada registrado)'}
+
+O que ele registrou ter estudado em outros blocos da mesma matéria:
+{chr(10).join(f"- {topico_sem_prefixo(n)}: {e.strip()}" for n, e in outros) or '(nada registrado)'}
+
+Próximos blocos desta matéria no cronograma: {'; '.join(proximos) or 'nenhum'}
+
+Responda em português do Brasil, em no máximo 220 palavras, com estes títulos em negrito:
+**✅ O que você já cobriu** (do conteúdo previsto do bloco)
+**⏳ O que falta neste bloco**
+**🧩 Base e ordem sugerida** (se o que ele estudou é pré-requisito, diga se foi uma boa escolha e a ordem para seguir)
+**➡️ Próxima sessão** (o que estudar, em quantos minutos, e quantas questões fazer)
+**📌 Status sugerido:** Concluído ou Parcial, com uma frase de justificativa.
+
+Regras: não invente conteúdo de edital nem números da prova; baseie-se só no conteúdo previsto e na orientação acima.
+Se algo do que ele estudou estiver fora do edital previsto, diga isso com franqueza. Seja direto, sem elogios vazios."""
+
+def texto_pedido_caderno(row, orientacao="", anot="", n_questoes=40, estudado=""):
     """NOVO (10/11/2026): monta o texto que o usuário copia e cola no Claude para receber o caderno em PDF."""
     nome = str(row['nome'])
     conteudo = nome.split(' · ', 1)[-1]
@@ -2499,6 +2595,9 @@ def texto_pedido_caderno(row, orientacao="", anot="", n_questoes=40):
     ]
     if anot and str(row['status']) != "Concluído":
         linhas.append(f"Estudei só até: {anot}")
+    if estudado:
+        linhas.append("O que estudei de fato (minhas anotações, inclua também estes conteúdos): "
+                      + " | ".join(l.strip() for l in str(estudado).splitlines() if l.strip()))
     if orientacao:
         linhas.append(f"Orientação do bloco (recorte de artigos/itens): {orientacao.strip()}")
     linhas += [
@@ -2545,6 +2644,63 @@ def cartao_bloco(conn, row, meta_id, mostrar_data=False, expandido=None):
                 st.success(f"🧠 **Foco sugerido pelo seu desempenho:** {_foco['materia']} "
                            f"({_foco['pct']:.0%} de acerto em {int(_foco['feitas'])} questões). "
                            "Use este bloco para o caderno de erros e questões dessa matéria.")
+        # NOVO (17/11/2026): o que estudei de fato + análise da IA
+        _reg = conn.execute("SELECT estudado, analise_ia FROM topicos WHERE id = ?", (topico_id,)).fetchone() or (None, None)
+        estudado_txt = (_reg[0] or "").strip()
+        _anal = (_reg[1] or "").strip()
+        _outros = estudado_na_materia(conn, topico_id, 2) if row['status'] != "Concluído" else []
+        if _outros:
+            st.caption("📚 **Você já registrou nesta matéria:** " + " · ".join(
+                f"{topico_sem_prefixo(n)[:40]}: {e.strip().splitlines()[-1][7:][:120]}" for n, e in _outros))
+        if st.toggle("📝 O que estudei neste bloco" + (" ✔️" if estudado_txt else ""), key=f"est_tg_{topico_id}",
+                     value=bool(estudado_txt) and row['status'] != "Concluído"):
+            if estudado_txt:
+                st.markdown("**Já registrado:**\n" + "\n".join(f"- {l}" for l in estudado_txt.splitlines() if l.strip()))
+            ver_e = st.session_state.get(f"est_ver_{topico_id}", 0)
+            novo_est = st.text_area("Escreva o que você estudou (assuntos, páginas, aulas, dúvidas)",
+                                    key=f"est_txt_{topico_id}_{ver_e}", height=90,
+                                    placeholder="Ex.: bases moleculares da vida: água, sais minerais, glicídios, lipídios, "
+                                                "proteínas, vitaminas e ácidos nucleicos. Falta mitose, meiose e metabolismo.")
+            e1, e2 = st.columns(2)
+            with e1:
+                if st.button("💾 Salvar o que estudei", key=f"est_salvar_{topico_id}"):
+                    try:
+                        if registrar_estudado(conn, topico_id, novo_est):
+                            st.session_state[f"est_ver_{topico_id}"] = ver_e + 1
+                            avisar("Registro salvo. Ele entra no pedido do caderno de questões e na análise da IA.")
+                        else:
+                            avisar("Nada foi salvo: escreva o que estudou.", "warning")
+                    except Exception as e:
+                        avisar(f"NÃO foi salvo. Erro: {e}", "error")
+                    st.rerun()
+            with e2:
+                ia_ok = _gemini_cfg()[0] is not None
+                if st.button("🤖 Analisar com a IA", key=f"est_ia_{topico_id}", disabled=not ia_ok,
+                             help=None if ia_ok else "Coloque a GEMINI_API_KEY nos Secrets do app (veja as instruções).") :
+                    try:
+                        if novo_est.strip():
+                            registrar_estudado(conn, topico_id, novo_est)
+                            st.session_state[f"est_ver_{topico_id}"] = ver_e + 1
+                        tudo = conn.execute("SELECT estudado FROM topicos WHERE id = ?", (topico_id,)).fetchone()[0] or ""
+                        if not tudo.strip():
+                            avisar("Escreva primeiro o que estudou; a IA analisa a partir disso.", "warning")
+                        else:
+                            with st.spinner("A IA está analisando o seu bloco..."):
+                                resp = gemini_texto(prompt_analise_bloco(conn, row, orientacao, tudo))
+                            conn.execute("UPDATE topicos SET analise_ia = ? WHERE id = ?",
+                                         (f"{hoje_local():%d/%m}\n{resp}", topico_id))
+                            conn.commit()
+                            avisar("Análise da IA pronta: veja dentro do bloco, em 📝 O que estudei.")
+                    except Exception as e:
+                        avisar(f"A IA não respondeu: {e}.", "error")
+                    st.rerun()
+            if _anal:
+                _data_a, _, _txt_a = _anal.partition("\n")
+                with st.container(border=True):
+                    st.markdown(f"🤖 **Análise da IA ({_data_a})**\n\n{_txt_a}")
+                    st.caption("A IA pode errar: use como orientação e confira com o material do curso.")
+            elif not _gemini_cfg()[0]:
+                st.caption("🤖 A análise da IA fica disponível quando a chave do Gemini estiver nos Secrets do app.")
         if st.toggle("✏️ Escrever ou editar a orientação", key=f"ori_tg_{topico_id}"):
             novo_txt = st.text_area("Orientação", value=orientacao, height=150,
                                     key=f"ori_{topico_id}", label_visibility="collapsed")
@@ -2595,7 +2751,7 @@ def cartao_bloco(conn, row, meta_id, mostrar_data=False, expandido=None):
         if row['materia'] != RED and st.toggle("📋 Gerar pedido do caderno de questões (PDF)", key=f"cad_tg_{topico_id}"):
             n_q = st.select_slider("Quantidade de questões", options=[10, 20, 30, 40, 50], value=40,
                                    key=f"cad_n_{topico_id}")
-            _ped = texto_pedido_caderno(row, orientacao, anot, n_q)
+            _ped = texto_pedido_caderno(row, orientacao, anot, n_q, estudado_txt)
             botao_copiar(_ped, f"cad_{topico_id}")
             st.caption("Depois de copiar, abra a conversa com o Claude no projeto CONCURSO CBMPE e cole. "
                        "Ele devolve o PDF com gabarito e comentários no final.")
@@ -2657,6 +2813,12 @@ def cartao_bloco(conn, row, meta_id, mostrar_data=False, expandido=None):
                 avisar("Nada foi salvo: informe quantas questões fez.", "warning")
             st.rerun()
 
+        def _salvar_estudado_digitado():
+            """Se escreveu em '📝 O que estudei' e não salvou, salva junto ao concluir/parcial."""
+            ver_e = st.session_state.get(f"est_ver_{topico_id}", 0)
+            if registrar_estudado(conn, topico_id, st.session_state.get(f"est_txt_{topico_id}_{ver_e}", "")):
+                st.session_state[f"est_ver_{topico_id}"] = ver_e + 1
+
         minutos_ja = int(row['minutos_estudados'] or 0)
         # NOVO (01/11/2026): registrar até onde chegou quando não termina o bloco
         onde_parei = st.text_input("📍 Onde parei (opcional, ex.: art. 18; página 40; meio do vídeo 3)",
@@ -2664,6 +2826,7 @@ def cartao_bloco(conn, row, meta_id, mostrar_data=False, expandido=None):
         col_a, col_b = st.columns(2)
         with col_a:
             if st.button("✅ Concluí este bloco", key=f"cr_conc_{topico_id}"):
+                _salvar_estudado_digitado()
                 txt = _gravar_questoes()
                 if txt is not None:
                     if minutos_cronometrados > 0:
@@ -2677,6 +2840,7 @@ def cartao_bloco(conn, row, meta_id, mostrar_data=False, expandido=None):
                 st.rerun()
         with col_b:
             if st.button("⏳ Fiz só uma parte", key=f"cr_parc_{topico_id}"):
+                _salvar_estudado_digitado()
                 txt = _gravar_questoes()
                 if txt is not None:
                     conn.execute("UPDATE topicos SET anotacao = ? WHERE id = ?", (onde_parei.strip() or None, topico_id))

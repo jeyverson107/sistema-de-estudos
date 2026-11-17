@@ -1580,7 +1580,7 @@ def _corte_por_escala(item):
         return 2          # caderno de erros de 30 min (a revisão da semana continua)
     return None
 
-def planejar_pela_escala(conn, meta_id, data_inicio, cfg=None, data_fim=None):
+def planejar_pela_escala(conn, meta_id, data_inicio, cfg=None, data_fim=None, fixos=()):
     """Calcula (sem gravar) a distribuição dos blocos pendentes pelos dias da escala, de data_inicio até a data final."""
     cfg = cfg or ler_escala(meta_id)
     if not cfg.get("ref_servico"):
@@ -1604,6 +1604,8 @@ def planejar_pela_escala(conn, meta_id, data_inicio, cfg=None, data_fim=None):
             if idx == hoje_idx:
                 ocupado_hoje += prev   # o que já foi concluído hoje ocupa o tempo de hoje
             continue
+        if tid in fixos:
+            continue   # bloco que fica onde está (ex.: os outros blocos de hoje, ao adiar um deles)
         resta = max(prev - feito, 15) if status == "Parcial" else prev
         fila.append({"id": tid, "materia": materia, "topico": topico_sem_prefixo(nome), "status": status,
                      "prev": prev, "feito": feito, "resta": resta, "idx": idx, "ordem": ordem})
@@ -1684,6 +1686,68 @@ def aplicar_pela_escala(conn, meta_id, data_inicio, cfg=None):
             conn.execute("DELETE FROM topicos WHERE id = ? AND status = 'Pendente' AND COALESCE(minutos_estudados, 0) = 0", (x["id"],))
     conn.commit()
     return plano
+
+# NOVO (17/11/2026): "Hoje não vou estudar este bloco" — adia para outro dia sem apagar nada
+def _gravar_posicao(conn, tid, idx, ordem, topico, inicio, passo):
+    sem, dia = idx // passo + 1, idx % passo
+    conn.execute("UPDATE topicos SET semana = ?, dia = ?, ordem = ?, nome = ? WHERE id = ?",
+                 (sem, dia, ordem, nome_topico_crono(sem, dia, topico, inicio), tid))
+
+def adiar_bloco(conn, meta_id, topico_id):
+    """Tira o bloco de hoje e o encaixa mais adiante. Com a escala ligada, redistribui os blocos de amanhã em
+    diante (os outros blocos de hoje ficam onde estão); se não couber sem cortar nada, vai para o próximo dia de estudo.
+    Devolve a nova data do bloco."""
+    hoje = hoje_local()
+    inicio = datetime.date.fromisoformat(get_config(f"cronograma_inicio_{meta_id}", CRONO_INICIO.isoformat()))
+    cfg = ler_escala(meta_id)
+    passo = 7 if cfg["ativa"] else 5
+    linha = conn.execute("SELECT semana, dia, nome, materia_id, ordem FROM topicos WHERE id = ?", (int(topico_id),)).fetchone()
+    if not linha:
+        raise ValueError("bloco não encontrado")
+    topico = topico_sem_prefixo(linha[2])
+    idx_bloco = (linha[0] - 1) * passo + linha[1]
+    # os blocos seguintes da MESMA matéria no mesmo dia (ex.: a lei seca daquele assunto) vão junto,
+    # para a ordem da matéria nunca ser invertida
+    juntos = [r[0] for r in conn.execute(
+        f"""SELECT id FROM topicos WHERE materia_id = ? AND status != 'Concluído' AND semana IS NOT NULL
+            AND (semana - 1) * {passo} + dia = ? AND ordem > ? ORDER BY ordem""",
+        (linha[3], idx_bloco, linha[4] or 0))]
+    mover = {int(topico_id), *juntos}
+    _foto_cronograma(conn, meta_id)   # permite ↩️ Desfazer (vale só hoje)
+    amanha = hoje + datetime.timedelta(days=1)
+    if cfg["ativa"]:
+        hoje_idx = _idx_de_data(inicio, hoje)
+        fixos = {tid for tid, sem, dia in conn.execute(
+            """SELECT t.id, t.semana, t.dia FROM topicos t JOIN materias m ON t.materia_id = m.id
+               WHERE m.meta_id = ? AND t.semana IS NOT NULL AND t.status != 'Concluído'""", (int(meta_id),))
+            if (sem - 1) * 7 + dia <= hoje_idx and tid not in mover}
+        try:
+            plano = planejar_pela_escala(conn, meta_id, amanha, cfg, fixos=fixos)
+        except Exception:
+            plano = {"erro": "falhou"}
+        if "erro" not in plano and not plano.get("cortes"):
+            for tid, d, ordem, top in plano["plano"]:
+                _gravar_posicao(conn, tid, (d - inicio).days, ordem, top, inicio, 7)
+            conn.commit()
+            return next(d for tid, d, _, _ in plano["plano"] if tid == int(topico_id))
+        # não coube sem cortes: vai para o primeiro dia de estudo depois de hoje, como primeiro bloco do dia
+        d = amanha
+        while minutos_do_dia(cfg, d) <= 0 and (d - amanha).days < 14:
+            d += datetime.timedelta(days=1)
+        idx = (d - inicio).days
+    else:
+        idx_hoje = (hoje - inicio).days
+        idx = (idx_hoje // 7) * 5 + min(idx_hoje % 7, 4) + 1   # próximo dia útil (seg a sex)
+        d = inicio + datetime.timedelta(weeks=idx // 5, days=idx % 5)
+    conn.execute(f"""UPDATE topicos SET ordem = ordem + ? WHERE id IN (SELECT t.id FROM topicos t
+                     JOIN materias m ON t.materia_id = m.id WHERE m.meta_id = ? AND (t.semana - 1) * {passo} + t.dia = ?)""",
+                 (len(mover), int(meta_id), idx))
+    _gravar_posicao(conn, int(topico_id), idx, 1, topico, inicio, passo)
+    for k, tid in enumerate(juntos, start=2):
+        nome_j = conn.execute("SELECT nome FROM topicos WHERE id = ?", (tid,)).fetchone()[0]
+        _gravar_posicao(conn, tid, idx, k, topico_sem_prefixo(nome_j), inicio, passo)
+    conn.commit()
+    return d
 
 def resumo_cortes_escala(plano):
     if not plano.get("cortes"):
@@ -2624,6 +2688,22 @@ def cartao_bloco(conn, row, meta_id, mostrar_data=False, expandido=None):
                         st.session_state.setdefault("_avisos", []).append(("success", txt.strip()))
                     set_timer_stop(topico_id)
                 st.rerun()
+        # NOVO (17/11/2026): escolher não estudar este bloco hoje
+        if row['status'] != "Concluído":
+            if st.button("📆 Hoje não: adiar este bloco", key=f"cr_adiar_{topico_id}",
+                         help="Tira o bloco de hoje e encaixa mais adiante no cronograma. Nada é apagado: "
+                              "minutos e questões já registrados continuam no bloco."):
+                try:
+                    if minutos_cronometrados > 0:   # o que já cronometrou não se perde
+                        salvar_status_com_aviso(conn, topico_id, "Parcial", minutos_ja + minutos_cronometrados)
+                    set_timer_stop(topico_id)
+                    nova = adiar_bloco(conn, meta_id, topico_id)
+                    avisar(f"📆 Bloco adiado: \"{row['materia']}\" agora está em {DIAS_ABREV[nova.weekday()]} {nova:%d/%m}."
+                           + (" Se mudar de ideia, use ↩️ Desfazer no topo do dia (vale só hoje)."
+                              if escala_ativa(meta_id) else ""))
+                except Exception as e:
+                    avisar(f"NÃO foi adiado. Erro: {e}", "error")
+                st.rerun()
     return timer_data['status'] == 'RODANDO'
 
 
@@ -2646,8 +2726,9 @@ def painel_escala_hoje(conn, meta_id, cfg):
     # ↩️ desfazer a reorganização automática de hoje
     if desfazer_disponivel(meta_id):
         with st.container(border=True):
-            st.write("🔁 **O app reorganizou o cronograma hoje** com o que tinha ficado pendente. "
-                     "Se você estudou e só esqueceu de marcar, desfaça, marque nas abas ⏪ o que estudou e reorganize de novo.")
+            st.write("🔁 **O cronograma foi reorganizado hoje** (pelo app, com o que tinha ficado pendente, ou porque "
+                     "você adiou um bloco). Se quiser voltar atrás, desfaça; se tinha estudado e só esqueceu de marcar, "
+                     "marque nas abas ⏪ o que estudou e reorganize de novo.")
             if st.button("↩️ Desfazer a reorganização de hoje", key="desf_auto"):
                 try:
                     n = desfazer_reorganizacao(conn, meta_id)

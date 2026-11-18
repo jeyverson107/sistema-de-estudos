@@ -2688,6 +2688,34 @@ def registrar_estudado(conn, topico_id, texto):
     conn.commit()
     return True
 
+PREFIXO_BASE = "Base (fora do edital): "
+
+def registrar_base(conn, meta_id, topico_id, texto, minutos):
+    """NOVO (17/11/2026): estudo de BASE/pré-requisito que não é o conteúdo do edital do bloco.
+    Cria um bloco concluído 'Base (fora do edital): ...' no mesmo dia, com o tempo usado (conta como estudo),
+    e deixa o bloco original pendente, com o tempo previsto inteiro, para ser reencaixado no cronograma."""
+    texto = (texto or "").strip()
+    if not texto:
+        raise ValueError("escreva em 📝 o que estudou de base")
+    minutos = int(minutos or 0)
+    if minutos <= 0:
+        raise ValueError("informe quantos minutos usou")
+    o = conn.execute("SELECT materia_id, semana, dia, ordem, bloco FROM topicos WHERE id = ?", (int(topico_id),)).fetchone()
+    inicio = datetime.date.fromisoformat(get_config(f"cronograma_inicio_{meta_id}", CRONO_INICIO.isoformat()))
+    hoje = hoje_local()
+    idx = _idx_de_data(inicio, hoje)          # a base fica registrada HOJE, o dia em que foi estudada
+    sem, dia = idx // 7 + 1, idx % 7
+    cur = conn.execute("""INSERT INTO topicos (materia_id, nome, semana, dia, ordem, bloco, minutos_planejados,
+                                               minutos_estudados, status, estudado)
+                          VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'Pendente', ?)""",
+                       (o[0], nome_topico_crono(sem, dia, PREFIXO_BASE + texto[:90], inicio), sem, dia,
+                        (o[3] or 0), o[4], minutos, f"{hoje:%d/%m}: {texto}"))
+    novo_id = cur.lastrowid
+    salvar_status_topico(conn, novo_id, "Concluído", minutos)   # grava o tempo como estudo de hoje
+    registrar_estudado(conn, topico_id, f"[base, fora do edital, {minutos} min] {texto}")
+    conn.commit()
+    return novo_id
+
 def estudado_na_materia(conn, topico_id, limite=4):
     """Anotações de 'o que estudei' dos OUTROS blocos da mesma matéria (os mais recentes primeiro)."""
     return conn.execute("""SELECT t2.nome, t2.estudado FROM topicos t1 JOIN topicos t2 ON t2.materia_id = t1.materia_id
@@ -2729,7 +2757,10 @@ Responda em português do Brasil, em no máximo 220 palavras, com estes títulos
 **📌 Status sugerido:** Concluído ou Parcial, com uma frase de justificativa.
 
 Regras: não invente conteúdo de edital nem números da prova; baseie-se só no conteúdo previsto e na orientação acima.
-Se algo do que ele estudou estiver fora do edital previsto, diga isso com franqueza. Seja direto, sem elogios vazios."""
+Registros marcados como [base, fora do edital] são estudo de PRÉ-REQUISITO escolhido pelo aluno (ex.: bases moleculares
+antes de citologia): trate como base legítima, diga se de fato ajuda o conteúdo do edital e NÃO os conte como conteúdo
+do bloco coberto. Só sugira "Concluído" se os itens do conteúdo previsto foram estudados. Se algo estudado não tiver
+relação com o conteúdo do bloco, diga com franqueza. Seja direto, sem elogios vazios."""
 
 def texto_pedido_caderno(row, orientacao="", anot="", n_questoes=40, estudado=""):
     """NOVO (10/11/2026): monta o texto que o usuário copia e cola no Claude para receber o caderno em PDF."""
@@ -2847,6 +2878,38 @@ def cartao_bloco(conn, row, meta_id, mostrar_data=False, expandido=None):
                     except Exception as e:
                         avisar(f"A IA não respondeu: {e}.", "error")
                     st.rerun()
+            # NOVO (17/11/2026): estudo de base / pré-requisito fora do edital
+            if row['status'] != "Concluído" and not topico_sem_prefixo(row['nome']).startswith(PREFIXO_BASE):
+                with st.container(border=True):
+                    st.markdown("🧱 **Estudei a BASE, não o conteúdo do edital deste bloco?**")
+                    st.caption("Use quando estudou um pré-requisito (ex.: bases moleculares antes de citologia). O tempo conta "
+                               "como estudo de hoje, num registro à parte, e ESTE bloco continua pendente com o tempo inteiro: "
+                               "o app reencaixa ele no cronograma para você estudar os itens do edital.")
+                    _min_padrao = minutos_cronometrados_base = 0
+                    try:
+                        _ts = get_timer_state(topico_id, minutos_plan * 60)
+                        if _ts['status'] != 'STOPPED':
+                            minutos_cronometrados_base = max(0, round((minutos_plan * 60 - _ts['restante']) / 60))
+                    except Exception:
+                        pass
+                    _min_padrao = minutos_cronometrados_base or minutos_plan
+                    b1, b2 = st.columns([1, 2])
+                    min_base = b1.number_input("Minutos usados", min_value=0, max_value=600, value=int(_min_padrao),
+                                               step=5, key=f"base_min_{topico_id}")
+                    with b2:
+                        st.write("")
+                        if st.button("🧱 Registrar como base (o bloco continua)", key=f"base_btn_{topico_id}"):
+                            try:
+                                txt_base = novo_est.strip() or (estudado_txt.splitlines()[-1][7:] if estudado_txt else "")
+                                registrar_base(conn, meta_id, topico_id, txt_base, min_base)
+                                st.session_state[f"est_ver_{topico_id}"] = ver_e + 1
+                                set_timer_stop(topico_id)
+                                avisar(f"🧱 Base registrada: {int(min_base)} min contados como estudo de hoje. O bloco "
+                                       f"\"{topico_sem_prefixo(row['nome'])[:50]}\" continua pendente e será reencaixado "
+                                       "no cronograma (amanhã o app reorganiza sozinho, ou use 📆 Hoje não para adiar já).")
+                            except Exception as e:
+                                avisar(f"NÃO foi registrado: {e}.", "error")
+                            st.rerun()
             if _anal:
                 _data_a, _, _txt_a = _anal.partition("\n")
                 with st.container(border=True):

@@ -326,7 +326,8 @@ def init_db():
         "minutos_estudados": "INTEGER DEFAULT 0",
         "anotacao": "TEXT",               # NOVO (01/11/2026): onde parei / observação do bloco
         "estudado": "TEXT",               # NOVO (17/11/2026): o que estudei de fato (registro com data)
-        "analise_ia": "TEXT"              # NOVO (17/11/2026): última análise da IA (Gemini) sobre o bloco
+        "analise_ia": "TEXT",             # NOVO (17/11/2026): última análise da IA (Gemini) sobre o bloco
+        "adiado_vezes": "INTEGER DEFAULT 0"  # NOVO (17/11/2026): quantas vezes o bloco foi adiado ("Hoje não")
     }
     for nome_col, tipo_col in novas_colunas.items():
         if nome_col not in colunas_existentes:
@@ -362,6 +363,9 @@ def init_db():
     c.execute("DELETE FROM cronometro_estado WHERE topico_id IN (SELECT id FROM topicos WHERE status = 'Concluído')")
 
     # NOVO (16/11/2026): simulados guardados à parte das questões do dia a dia
+    # NOVO (17/11/2026): revisões semanais feitas pela IA (Gemini)
+    c.execute('''CREATE TABLE IF NOT EXISTS revisoes_ia (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, meta_id INTEGER, data TEXT, periodo TEXT, texto TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS simulados (
                     id INTEGER PRIMARY KEY AUTOINCREMENT, meta_id INTEGER, nome TEXT, data TEXT,
                     total_questoes INTEGER, minutos INTEGER, criado_em TEXT)''')
@@ -1716,6 +1720,7 @@ def adiar_bloco(conn, meta_id, topico_id):
         (linha[3], idx_bloco, linha[4] or 0))]
     mover = {int(topico_id), *juntos}
     _foto_cronograma(conn, meta_id)   # permite ↩️ Desfazer (vale só hoje)
+    conn.execute("UPDATE topicos SET adiado_vezes = COALESCE(adiado_vezes, 0) + 1 WHERE id = ?", (int(topico_id),))
     amanha = hoje + datetime.timedelta(days=1)
     if cfg["ativa"]:
         hoje_idx = _idx_de_data(inicio, hoje)
@@ -2036,6 +2041,152 @@ def config_prova(conn, meta_id):
 
 MIN_QUESTOES_CONFIAVEL = 20   # abaixo disso o app não manda aumentar nem reduzir
 PESO_NEUTRO = 10              # suavização: cada matéria "começa" com 10 questões imaginárias a 50%
+
+# -----------------------------------------------------------------------------
+# NOVO (17/11/2026): REVISÃO DA SEMANA PELA IA (Gemini)
+# O app junta os números da semana (ele calcula); a IA só comenta e sugere ajustes.
+# -----------------------------------------------------------------------------
+def dados_da_semana(conn, meta_id, df=None, hoje=None, dias=7):
+    hoje = hoje or hoje_local()
+    ini = hoje - datetime.timedelta(days=dias - 1)
+    inicio = datetime.date.fromisoformat(get_config(f"cronograma_inicio_{meta_id}", CRONO_INICIO.isoformat()))
+    i0, i1 = _idx_de_data(inicio, ini), _idx_de_data(inicio, hoje)
+    cfg = ler_escala(meta_id)
+    linhas = [f"Período analisado: {ini:%d/%m/%Y} a {hoje:%d/%m/%Y}."]
+
+    # 1. blocos previstos para o período
+    bl = conn.execute("""SELECT (t.semana-1)*7+t.dia AS idx, m.nome, t.nome, t.status, t.minutos_planejados,
+                                COALESCE(t.minutos_estudados,0), COALESCE(t.adiado_vezes,0), COALESCE(t.estudado,'')
+                         FROM topicos t JOIN materias m ON t.materia_id = m.id
+                         WHERE m.meta_id = ? AND t.semana IS NOT NULL AND (t.semana-1)*7+t.dia BETWEEN ? AND ?
+                         ORDER BY idx, t.ordem""", (int(meta_id), i0, i1)).fetchall()
+    conc = sum(1 for b in bl if b[3] == "Concluído")
+    parc = sum(1 for b in bl if b[3] == "Parcial")
+    linhas.append(f"\nBLOCOS PREVISTOS NO PERÍODO: {len(bl)} (concluídos {conc}, parciais {parc}, pendentes {len(bl) - conc - parc}).")
+    for idx, mat, nome, stt, prev, feito, adi, est in bl:
+        d = inicio + datetime.timedelta(days=int(idx))
+        extra = f"; adiado {adi}x" if adi else ""
+        nota = " | anotações: " + " / ".join(l.strip() for l in est.splitlines() if l.strip())[:300] if est.strip() else ""
+        linhas.append(f"- {d:%d/%m} {mat}: {topico_sem_prefixo(nome)[:70]} → {stt}, {feito}/{prev} min{extra}{nota}")
+
+    # 2. tempo estudado por dia × meta da escala
+    ses = dict(conn.execute("""SELECT s.data, SUM(s.minutos) FROM sessoes s JOIN topicos t ON s.topico_id = t.id
+                               JOIN materias m ON t.materia_id = m.id
+                               WHERE m.meta_id = ? AND s.data BETWEEN ? AND ? GROUP BY s.data""",
+                            (int(meta_id), ini.isoformat(), hoje.isoformat())).fetchall())
+    linhas.append("\nTEMPO ESTUDADO POR DIA (registrado no app) × META:")
+    tot_e = tot_m = 0
+    for k in range(dias):
+        d = ini + datetime.timedelta(days=k)
+        meta_d = minutos_do_dia(cfg, d) if cfg["ativa"] else (MINUTOS_DIA if d.weekday() < 5 else 0)
+        tipo = TIPOS_DIA.get(tipo_do_dia(cfg, d), "") if cfg["ativa"] else ("dia útil" if d.weekday() < 5 else "fim de semana")
+        feito = int(ses.get(d.isoformat(), 0) or 0)
+        tot_e += feito; tot_m += meta_d
+        linhas.append(f"- {DIAS_ABREV[d.weekday()]} {d:%d/%m} ({tipo}): meta {meta_d} min, estudado {feito} min")
+    linhas.append(f"Total: {tot_e} min estudados de {tot_m} min de meta.")
+
+    # 3. questões, simulados e redações do período
+    ex = conn.execute("""SELECT m.nome, SUM(e.acertos), SUM(e.acertos + e.erros) FROM exercicios e
+                         JOIN topicos t ON e.topico_id = t.id JOIN materias m ON t.materia_id = m.id
+                         WHERE m.meta_id = ? AND e.data BETWEEN ? AND ? GROUP BY m.nome""",
+                      (int(meta_id), ini.isoformat(), hoje.isoformat())).fetchall()
+    linhas.append("\nQUESTÕES NO PERÍODO: " + ("; ".join(f"{m}: {a}/{n} ({round(100 * a / n)}%)" for m, a, n in ex if n)
+                                              or "nenhuma registrada"))
+    try:
+        sims = conn.execute("""SELECT s.nome, s.data, SUM(i.acertos), SUM(i.respondidas) FROM simulados s
+                               JOIN simulado_itens i ON i.simulado_id = s.id WHERE s.meta_id = ? AND s.data BETWEEN ? AND ?
+                               GROUP BY s.id""", (int(meta_id), ini.isoformat(), hoje.isoformat())).fetchall()
+        if sims:
+            linhas.append("SIMULADOS: " + "; ".join(f"{n} ({dt[8:10]}/{dt[5:7]}): {a}/{r}" for n, dt, a, r in sims))
+        red = conn.execute("SELECT data, total FROM redacoes WHERE data BETWEEN ? AND ?",
+                           (ini.isoformat(), hoje.isoformat())).fetchall()
+        if red:
+            linhas.append("REDAÇÕES CORRIGIDAS: " + "; ".join(f"{dt[8:10]}/{dt[5:7]}: nota {t}" for dt, t in red))
+    except Exception:
+        pass
+
+    # 4. situação geral
+    atr = blocos_atrasados(conn, meta_id, hoje)
+    linhas.append(f"\nBLOCOS ATRASADOS HOJE (antes de hoje e não concluídos): {len(atr)}")
+    adi = conn.execute("""SELECT m.nome, SUM(t.adiado_vezes) FROM topicos t JOIN materias m ON t.materia_id = m.id
+                          WHERE m.meta_id = ? AND COALESCE(t.adiado_vezes,0) > 0 GROUP BY m.nome ORDER BY 2 DESC""",
+                       (int(meta_id),)).fetchall()
+    if adi:
+        linhas.append("ADIAMENTOS ACUMULADOS POR MATÉRIA: " + "; ".join(f"{m} {n}x" for m, n in adi))
+    if df is not None and not df.empty:
+        linhas.append("DESEMPENHO GERAL POR MATÉRIA (calculado pelo app; peso = questões na prova): " + "; ".join(
+            f"{r['materia']}: {int(r['feitas'])} questões" + (f", {r['pct']:.0%}" if r['feitas'] else "") +
+            f", peso {int(r['questoes_prova'])}" for _, r in df.iterrows()))
+
+    # 5. próximos 7 dias
+    prox = conn.execute("""SELECT (t.semana-1)*7+t.dia AS idx, m.nome, t.nome, t.minutos_planejados
+                           FROM topicos t JOIN materias m ON t.materia_id = m.id
+                           WHERE m.meta_id = ? AND t.semana IS NOT NULL AND t.status != 'Concluído'
+                             AND (t.semana-1)*7+t.dia BETWEEN ? AND ? ORDER BY idx, t.ordem""",
+                        (int(meta_id), i1 + 1, i1 + 7)).fetchall()
+    linhas.append("\nPRÓXIMOS 7 DIAS NO CRONOGRAMA:")
+    for idx, mat, nome, prev in prox:
+        d = inicio + datetime.timedelta(days=int(idx))
+        linhas.append(f"- {DIAS_ABREV[d.weekday()]} {d:%d/%m}: {mat}: {topico_sem_prefixo(nome)[:60]} ({prev} min)")
+    return ini, hoje, "\n".join(linhas)
+
+def prompt_revisao_semana(dados, nome_meta):
+    return f"""Você é um coach de estudos para concursos, experiente com a banca Instituto AOCP.
+O aluno estuda para: {nome_meta}. Ele é policial militar em escala 24×72 (dia de serviço, pós-serviço e dias livres),
+por isso a meta de cada dia muda. Os números abaixo foram CALCULADOS PELO APP: não refaça contas nem invente dados.
+
+{dados}
+
+Responda em português do Brasil, em no máximo 300 palavras, com estes títulos em negrito:
+**📊 Como foi a semana** (2 a 3 frases, com os números principais)
+**⚠️ Padrões que chamam atenção** (até 3 itens: ex.: matéria adiada repetidamente, dias abaixo da meta, matéria com acerto baixo, bloco parcial que se arrasta)
+**🎯 3 ajustes para os próximos 7 dias** (concretos, citando dias e blocos da lista "PRÓXIMOS 7 DIAS"; não mude a ordem das matérias nem crie conteúdo novo)
+**💬 Em uma frase** (avaliação franca, sem elogio vazio)
+
+Regras: se faltar dado (ex.: nenhuma questão registrada), diga isso e sugira registrar, sem supor resultados.
+Não dê conselhos de conteúdo jurídico específico (artigos, prazos): o foco é rotina, ritmo e prioridades."""
+
+def secao_revisao_semana(conn, meta_id, df=None):
+    st.subheader("🤖 Revisão da semana (IA)")
+    st.caption("O app junta os dados dos últimos 7 dias (blocos, minutos × meta da escala, adiamentos, questões, simulados, "
+               "redações e o que você anotou em 📝 O que estudei) e a IA comenta e sugere 3 ajustes. "
+               "Nada no cronograma é alterado: quem decide é você.")
+    chave, modelo = _gemini_cfg()
+    nome_meta = (conn.execute("SELECT nome FROM metas WHERE id = ?", (int(meta_id),)).fetchone() or ["seu objetivo"])[0]
+    ultima = conn.execute("SELECT data, periodo, texto FROM revisoes_ia WHERE meta_id = ? ORDER BY id DESC LIMIT 1",
+                          (int(meta_id),)).fetchone()
+    if ultima and ultima[0] == hoje_local().isoformat():
+        st.caption("Você já gerou a revisão hoje. Gerar de novo substitui a de hoje.")
+    if st.button("🤖 Gerar a revisão da semana", key=f"rev_sem_{meta_id}", type="primary"):
+        try:
+            if not chave:
+                raise RuntimeError("o app não encontrou a GEMINI_API_KEY nos Secrets")
+            ini, fim, dados = dados_da_semana(conn, meta_id, df)
+            with st.spinner("A IA está analisando a sua semana..."):
+                texto = gemini_texto(prompt_revisao_semana(dados, nome_meta))
+            hoje_txt = hoje_local().isoformat()
+            conn.execute("DELETE FROM revisoes_ia WHERE meta_id = ? AND data = ?", (int(meta_id), hoje_txt))
+            conn.execute("INSERT INTO revisoes_ia (meta_id, data, periodo, texto) VALUES (?, ?, ?, ?)",
+                         (int(meta_id), hoje_txt, f"{ini:%d/%m} a {fim:%d/%m}", texto))
+            conn.commit()
+            avisar("Revisão da semana pronta.")
+        except Exception as e:
+            avisar(f"A revisão não foi gerada: {e}.", "error")
+        st.rerun()
+    if ultima:
+        d = datetime.date.fromisoformat(ultima[0])
+        with st.container(border=True):
+            st.markdown(f"**Revisão de {d:%d/%m/%Y}** (período {ultima[1]})\n\n{ultima[2]}")
+            st.caption("A IA pode errar: use como conselho e confira com os números acima.")
+    anteriores = conn.execute("SELECT data, periodo, texto FROM revisoes_ia WHERE meta_id = ? ORDER BY id DESC LIMIT 12 OFFSET 1",
+                              (int(meta_id),)).fetchall()
+    if anteriores and st.toggle("📚 Ver revisões anteriores", key=f"rev_hist_{meta_id}"):
+        for dt, per, txt in anteriores:
+            st.markdown(f"---\n**{dt[8:10]}/{dt[5:7]}/{dt[:4]}** (período {per})\n\n{txt}")
+    if st.toggle("🔎 Ver os dados que vão para a IA", key=f"rev_dados_{meta_id}"):
+        st.code(dados_da_semana(conn, meta_id, df)[2], language=None)
+    st.caption(f"🔑 Chave do Gemini: **encontrada** (modelo {modelo})." if chave else
+               "🔑 Chave do Gemini: **não encontrada** nos Secrets do app.")
 
 def analise_desempenho(conn, meta_id, hoje=None, cfg=None):
     """Tabela por matéria: questões, acerto, estimativa, pontos projetados, progresso e situação."""
@@ -4525,6 +4676,9 @@ elif menu == "🧠 Análise e ajuste":
                 except Exception as e:
                     avisar(f"NÃO foi ajustado. Erro: {e}", "error")
                 st.rerun()
+
+        st.divider()
+        secao_revisao_semana(conn, meta_an, df)
 
 # =============================================================================
 # MENU 5: GERENCIADOR

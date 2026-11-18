@@ -2675,9 +2675,11 @@ def cartao_bloco(conn, row, meta_id, mostrar_data=False, expandido=None):
                     st.rerun()
             with e2:
                 ia_ok = _gemini_cfg()[0] is not None
-                if st.button("🤖 Analisar com a IA", key=f"est_ia_{topico_id}", disabled=not ia_ok,
-                             help=None if ia_ok else "Coloque a GEMINI_API_KEY nos Secrets do app (veja as instruções).") :
+                if st.button("🤖 Analisar com a IA", key=f"est_ia_{topico_id}"):
                     try:
+                        if not ia_ok:
+                            raise RuntimeError("o app não encontrou a GEMINI_API_KEY nos Secrets. Confira se a linha foi "
+                                               "colada no começo dos Secrets, entre aspas, e salva")
                         if novo_est.strip():
                             registrar_estudado(conn, topico_id, novo_est)
                             st.session_state[f"est_ver_{topico_id}"] = ver_e + 1
@@ -2699,8 +2701,9 @@ def cartao_bloco(conn, row, meta_id, mostrar_data=False, expandido=None):
                 with st.container(border=True):
                     st.markdown(f"🤖 **Análise da IA ({_data_a})**\n\n{_txt_a}")
                     st.caption("A IA pode errar: use como orientação e confira com o material do curso.")
-            elif not _gemini_cfg()[0]:
-                st.caption("🤖 A análise da IA fica disponível quando a chave do Gemini estiver nos Secrets do app.")
+            _ch, _mod = _gemini_cfg()
+            st.caption(f"🔑 Chave do Gemini: **encontrada** (modelo {_mod})." if _ch else
+                       "🔑 Chave do Gemini: **não encontrada** nos Secrets do app. A análise da IA só funciona com ela.")
         if st.toggle("✏️ Escrever ou editar a orientação", key=f"ori_tg_{topico_id}"):
             novo_txt = st.text_area("Orientação", value=orientacao, height=150,
                                     key=f"ori_{topico_id}", label_visibility="collapsed")

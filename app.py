@@ -2144,6 +2144,8 @@ Responda em português do Brasil, em no máximo 300 palavras, com estes títulos
 **💬 Em uma frase** (avaliação franca, sem elogio vazio)
 
 Regras: se faltar dado (ex.: nenhuma questão registrada), diga isso e sugira registrar, sem supor resultados.
+Se uma anotação citar livro, capítulo, página ou aula sem dizer os assuntos, não suponha o conteúdo: trate como
+"assunto não informado" e sugira escrever os títulos do sumário.
 Não dê conselhos de conteúdo jurídico específico (artigos, prazos): o foco é rotina, ritmo e prioridades."""
 
 def secao_revisao_semana(conn, meta_id, df=None):
@@ -2760,7 +2762,11 @@ Regras: não invente conteúdo de edital nem números da prova; baseie-se só no
 Registros marcados como [base, fora do edital] são estudo de PRÉ-REQUISITO escolhido pelo aluno (ex.: bases moleculares
 antes de citologia): trate como base legítima, diga se de fato ajuda o conteúdo do edital e NÃO os conte como conteúdo
 do bloco coberto. Só sugira "Concluído" se os itens do conteúdo previsto foram estudados. Se algo estudado não tiver
-relação com o conteúdo do bloco, diga com franqueza. Seja direto, sem elogios vazios."""
+relação com o conteúdo do bloco, diga com franqueza. Seja direto, sem elogios vazios.
+LIVROS E MATERIAIS: se o aluno citar um livro, apostila, aula ou PDF só pelo nome, número de capítulo, página ou aula,
+SEM dizer quais assuntos estudou, NÃO suponha o conteúdo (capítulos mudam de edição para edição). Nesse caso, comece a
+resposta com "**📖 Faltam os assuntos:** escreva em 📝 os títulos do sumário que você estudou (ex.: água, sais minerais,
+glicídios) para eu analisar com precisão." e analise apenas o que estiver escrito com clareza."""
 
 def texto_pedido_caderno(row, orientacao="", anot="", n_questoes=40, estudado=""):
     """NOVO (10/11/2026): monta o texto que o usuário copia e cola no Claude para receber o caderno em PDF."""
@@ -2841,8 +2847,9 @@ def cartao_bloco(conn, row, meta_id, mostrar_data=False, expandido=None):
             ver_e = st.session_state.get(f"est_ver_{topico_id}", 0)
             novo_est = st.text_area("Escreva o que você estudou (assuntos, páginas, aulas, dúvidas)",
                                     key=f"est_txt_{topico_id}_{ver_e}", height=90,
-                                    placeholder="Ex.: bases moleculares da vida: água, sais minerais, glicídios, lipídios, "
-                                                "proteínas, vitaminas e ácidos nucleicos. Falta mitose, meiose e metabolismo.")
+                                    placeholder="Ex.: Amabis & Martho, vol. 1, cap. 3 – A química da vida: água, sais "
+                                                "minerais, glicídios, lipídios, proteínas. (Se citar livro ou aula, escreva "
+                                                "também os assuntos do sumário.)")
             e1, e2 = st.columns(2)
             with e1:
                 if st.button("💾 Salvar o que estudei", key=f"est_salvar_{topico_id}"):

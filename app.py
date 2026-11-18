@@ -1157,7 +1157,7 @@ def mapa_assuntos_topicos(conn, meta_id):
 def importar_simulado_ui(conn, meta_id):
     ver = st.session_state.get("imp_ver", 0)
     st.write("Termine o simulado, toque em **📋 Copiar resultado** e cole o texto aqui. "
-             "O resultado fica guardado **à parte** das questões do dia a dia, em 🏁 Meus Simulados.")
+             "O resultado fica guardado **à parte** das questões do dia a dia, em 🏁 Simulados.")
     texto = st.text_area("1️⃣ Cole aqui o resultado do simulado", height=160, key=f"imp_txt_{ver}",
                          placeholder="RESULTADO – Simulado 1 CFO CBMPE 2027 (feito em ...)")
     st.markdown(f"<style>.st-key-imp_ler_{ver} button{{background:#16a34a;border-color:#16a34a;color:#fff}}"
@@ -1221,7 +1221,7 @@ def importar_simulado_ui(conn, meta_id):
             conf = conn.execute("SELECT COUNT(*), SUM(acertos), SUM(respondidas) FROM simulado_itens WHERE simulado_id = ?", (sid,)).fetchone()
             if conf[0] == len(plano):
                 st.session_state["imp_ver"] = ver + 1
-                avisar(f"Simulado salvo e conferido: {conf[1]} acertos em {conf[2]} questões. Veja a análise em 🏁 Meus Simulados.")
+                avisar(f"Simulado salvo e conferido: {conf[1]} acertos em {conf[2]} questões. Veja a análise em 🏁 Simulados.")
             else:
                 avisar("O app não encontrou todos os itens ao conferir. Tente de novo.", "error")
         except Exception as ex:
@@ -1843,7 +1843,7 @@ def texto_revisao_final(conn, meta_id):
         txt += " ⚠️ Está ficando curta: evite perder mais dias e use as folgas para repor."
     elif nivel == "critico":
         txt += (" 🔴 Muito curta: o ritmo não está sustentável. Aumente a meta dos dias livres ou do pós-serviço "
-                "em 🗓️ Cronograma Semanal → Minha escala, ou reponha nas folgas.")
+                "em 🗓️ Cronograma → Minha escala, ou reponha nas folgas.")
     return txt, nivel
 
 def reorganizar_automatico(conn, meta_id):
@@ -2380,8 +2380,8 @@ def abas_por_dia(conn, meta_id, inicio, idx_ref, hoje, conteudo_hoje=None, dias_
                     rodando = cartao_bloco(conn, row, meta_id) or rodando
             elif tipo == "antigos":
                 sub = atr[atr["idx"].isin(antigos)]
-                st.caption(f"{len(sub)} bloco(s) de dias mais antigos. Se forem muitos, use '🔁 Fiquei para trás' "
-                           "em 🗓️ Cronograma Semanal para reorganizar o cronograma a partir de hoje.")
+                st.caption(f"{len(sub)} bloco(s) de dias mais antigos. Se forem muitos, use {onde_reorganizar(meta_id)} "
+                           "para reorganizar o cronograma a partir de hoje.")
                 for _, row in sub.iterrows():
                     rodando = cartao_bloco(conn, row, meta_id, mostrar_data=True, expandido=False) or rodando
             else:
@@ -2800,18 +2800,22 @@ def texto_pedido_caderno(row, orientacao="", anot="", n_questoes=40, estudado=""
 
 
 def cartao_bloco(conn, row, meta_id, mostrar_data=False, expandido=None):
+    """Cartão do bloco. NOVO (17/11/2026): layout enxuto — o essencial no topo, os 4 desfechos numa linha
+    (Concluí · Fiz parte · Base · Hoje não) e o restante recolhido em '➕ Mais opções'."""
     topico_id = int(row['id'])
     minutos_plan = int(row['minutos_planejados'] or 0)
-    icone = "✅" if row['status'] == "Concluído" else ("⏳" if row['status'] == "Parcial" else "📖")
+    concluido = row['status'] == "Concluído"
+    icone = "✅" if concluido else ("⏳" if row['status'] == "Parcial" else "📖")
     data_txt = (row['nome'].split(' · ', 1)[0][4:] + " · ") if mostrar_data and ' · ' in row['nome'] else ""
     titulo = f"{icone} {data_txt}**{row['bloco']} · {row['materia']}** | {minutos_plan} min"
     if mostrar_data:
         titulo += f" · {row['nome'].split(' · ', 1)[-1][:60]}"
-    with st.expander(titulo, expanded=(row['status'] != "Concluído") if expandido is None else expandido):
+    with st.expander(titulo, expanded=(not concluido) if expandido is None else expandido):
+        # ---------------- 1. o que estudar ----------------
         st.markdown(f"**Conteúdo:** {row['nome'].split(' · ', 1)[-1]}")
         anot = row.get('anotacao') if hasattr(row, 'get') else None
         anot = anot.strip() if isinstance(anot, str) else ""
-        if anot and row['status'] != "Concluído":
+        if anot and not concluido:
             st.warning(f"📍 **Onde você parou:** {anot}")
         orientacao = buscar_orientacao(conn, row['materia'], row['nome'])
         if orientacao:
@@ -2826,136 +2830,32 @@ def cartao_bloco(conn, row, meta_id, mostrar_data=False, expandido=None):
                         if st.button("🔄 Trocar por outra proposta", key=f"prop_troca_{topico_id}"):
                             proposta_do_bloco(conn, topico_id, trocar=True)
                             st.rerun()
-        if row['materia'] == REV and row['status'] != "Concluído":
+        if row['materia'] == REV and not concluido:
             _foco = foco_sugerido(conn, meta_id)
             if _foco:
                 st.success(f"🧠 **Foco sugerido pelo seu desempenho:** {_foco['materia']} "
                            f"({_foco['pct']:.0%} de acerto em {int(_foco['feitas'])} questões). "
                            "Use este bloco para o caderno de erros e questões dessa matéria.")
-        # NOVO (17/11/2026): o que estudei de fato + análise da IA
         _reg = conn.execute("SELECT estudado, analise_ia FROM topicos WHERE id = ?", (topico_id,)).fetchone() or (None, None)
         estudado_txt = (_reg[0] or "").strip()
         _anal = (_reg[1] or "").strip()
-        _outros = estudado_na_materia(conn, topico_id, 2) if row['status'] != "Concluído" else []
-        if _outros:
-            st.caption("📚 **Você já registrou nesta matéria:** " + " · ".join(
-                f"{topico_sem_prefixo(n)[:40]}: {e.strip().splitlines()[-1][7:][:120]}" for n, e in _outros))
-        if st.toggle("📝 O que estudei neste bloco" + (" ✔️" if estudado_txt else ""), key=f"est_tg_{topico_id}",
-                     value=bool(estudado_txt) and row['status'] != "Concluído"):
-            if estudado_txt:
-                st.markdown("**Já registrado:**\n" + "\n".join(f"- {l}" for l in estudado_txt.splitlines() if l.strip()))
-            ver_e = st.session_state.get(f"est_ver_{topico_id}", 0)
-            novo_est = st.text_area("Escreva o que você estudou (assuntos, páginas, aulas, dúvidas)",
-                                    key=f"est_txt_{topico_id}_{ver_e}", height=90,
-                                    placeholder="Ex.: Amabis & Martho, vol. 1, cap. 3 – A química da vida: água, sais "
-                                                "minerais, glicídios, lipídios, proteínas. (Se citar livro ou aula, escreva "
-                                                "também os assuntos do sumário.)")
-            e1, e2 = st.columns(2)
-            with e1:
-                if st.button("💾 Salvar o que estudei", key=f"est_salvar_{topico_id}"):
-                    try:
-                        if registrar_estudado(conn, topico_id, novo_est):
-                            st.session_state[f"est_ver_{topico_id}"] = ver_e + 1
-                            avisar("Registro salvo. Ele entra no pedido do caderno de questões e na análise da IA.")
-                        else:
-                            avisar("Nada foi salvo: escreva o que estudou.", "warning")
-                    except Exception as e:
-                        avisar(f"NÃO foi salvo. Erro: {e}", "error")
-                    st.rerun()
-            with e2:
-                ia_ok = _gemini_cfg()[0] is not None
-                if st.button("🤖 Analisar com a IA", key=f"est_ia_{topico_id}"):
-                    try:
-                        if not ia_ok:
-                            raise RuntimeError("o app não encontrou a GEMINI_API_KEY nos Secrets. Confira se a linha foi "
-                                               "colada no começo dos Secrets, entre aspas, e salva")
-                        if novo_est.strip():
-                            registrar_estudado(conn, topico_id, novo_est)
-                            st.session_state[f"est_ver_{topico_id}"] = ver_e + 1
-                        tudo = conn.execute("SELECT estudado FROM topicos WHERE id = ?", (topico_id,)).fetchone()[0] or ""
-                        if not tudo.strip():
-                            avisar("Escreva primeiro o que estudou; a IA analisa a partir disso.", "warning")
-                        else:
-                            with st.spinner("A IA está analisando o seu bloco..."):
-                                resp = gemini_texto(prompt_analise_bloco(conn, row, orientacao, tudo))
-                            conn.execute("UPDATE topicos SET analise_ia = ? WHERE id = ?",
-                                         (f"{hoje_local():%d/%m}\n{resp}", topico_id))
-                            conn.commit()
-                            avisar("Análise da IA pronta: veja dentro do bloco, em 📝 O que estudei.")
-                    except Exception as e:
-                        avisar(f"A IA não respondeu: {e}.", "error")
-                    st.rerun()
-            # NOVO (17/11/2026): estudo de base / pré-requisito fora do edital
-            if row['status'] != "Concluído" and not topico_sem_prefixo(row['nome']).startswith(PREFIXO_BASE):
-                with st.container(border=True):
-                    st.markdown("🧱 **Estudei a BASE, não o conteúdo do edital deste bloco?**")
-                    st.caption("Use quando estudou um pré-requisito (ex.: bases moleculares antes de citologia). O tempo conta "
-                               "como estudo de hoje, num registro à parte, e ESTE bloco continua pendente com o tempo inteiro: "
-                               "o app reencaixa ele no cronograma para você estudar os itens do edital.")
-                    _min_padrao = minutos_cronometrados_base = 0
-                    try:
-                        _ts = get_timer_state(topico_id, minutos_plan * 60)
-                        if _ts['status'] != 'STOPPED':
-                            minutos_cronometrados_base = max(0, round((minutos_plan * 60 - _ts['restante']) / 60))
-                    except Exception:
-                        pass
-                    _min_padrao = minutos_cronometrados_base or minutos_plan
-                    b1, b2 = st.columns([1, 2])
-                    min_base = b1.number_input("Minutos usados", min_value=0, max_value=600, value=int(_min_padrao),
-                                               step=5, key=f"base_min_{topico_id}")
-                    with b2:
-                        st.write("")
-                        if st.button("🧱 Registrar como base (o bloco continua)", key=f"base_btn_{topico_id}"):
-                            try:
-                                txt_base = novo_est.strip() or (estudado_txt.splitlines()[-1][7:] if estudado_txt else "")
-                                registrar_base(conn, meta_id, topico_id, txt_base, min_base)
-                                st.session_state[f"est_ver_{topico_id}"] = ver_e + 1
-                                set_timer_stop(topico_id)
-                                avisar(f"🧱 Base registrada: {int(min_base)} min contados como estudo de hoje. O bloco "
-                                       f"\"{topico_sem_prefixo(row['nome'])[:50]}\" continua pendente e será reencaixado "
-                                       "no cronograma (amanhã o app reorganiza sozinho, ou use 📆 Hoje não para adiar já).")
-                            except Exception as e:
-                                avisar(f"NÃO foi registrado: {e}.", "error")
-                            st.rerun()
-            if _anal:
-                _data_a, _, _txt_a = _anal.partition("\n")
-                with st.container(border=True):
-                    st.markdown(f"🤖 **Análise da IA ({_data_a})**\n\n{_txt_a}")
-                    st.caption("A IA pode errar: use como orientação e confira com o material do curso.")
-            _ch, _mod = _gemini_cfg()
-            st.caption(f"🔑 Chave do Gemini: **encontrada** (modelo {_mod})." if _ch else
-                       "🔑 Chave do Gemini: **não encontrada** nos Secrets do app. A análise da IA só funciona com ela.")
-        if st.toggle("✏️ Escrever ou editar a orientação", key=f"ori_tg_{topico_id}"):
-            novo_txt = st.text_area("Orientação", value=orientacao, height=150,
-                                    key=f"ori_{topico_id}", label_visibility="collapsed")
-            if st.button("💾 Salvar orientação", key=f"ori_salvar_{topico_id}"):
-                try:
-                    salvar_orientacao(conn, row['materia'], row['nome'], novo_txt)
-                    ok = buscar_orientacao(conn, row['materia'], row['nome']) == novo_txt.strip()
-                    avisar("Orientação salva e conferida." if ok else
-                           "Orientação apagada." if not novo_txt.strip() else "A orientação não foi confirmada no banco. Tente de novo.",
-                           "success" if ok or not novo_txt.strip() else "error")
-                except Exception as e:
-                    avisar(f"Orientação NÃO salva. Erro: {e}", "error")
-                st.rerun()
+
+        # ---------------- 2. cronômetro ----------------
         q_ja = conn.execute("SELECT COALESCE(SUM(acertos),0), COALESCE(SUM(erros),0) FROM exercicios WHERE topico_id = ?",
                             (topico_id,)).fetchone()
-        st.write(f"**Status:** `{row['status']}` · **Minutos registrados:** {int(row['minutos_estudados'] or 0)}"
-                 + (f" · **Questões:** {q_ja[0] + q_ja[1]} ({q_ja[0]} acertos)" if q_ja[0] + q_ja[1] else ""))
-
-        # cronômetro (em bloco Parcial parte do que FALTA; no zero continua contando o tempo extra)
+        st.caption(f"Status: **{row['status']}** · {int(row['minutos_estudados'] or 0)} min registrados"
+                   + (f" · {q_ja[0] + q_ja[1]} questões ({q_ja[0]} acertos)" if q_ja[0] + q_ja[1] else "")
+                   + (" · 📝 tem anotação" if estudado_txt else "") + (" · 🤖 tem análise da IA" if _anal else ""))
         minutos_reg = int(row['minutos_estudados'] or 0)
         base_seg = ((minutos_plan - minutos_reg) if row['status'] == "Parcial" and 0 < minutos_reg < minutos_plan
                     else minutos_plan) * 60
         timer_data = get_timer_state(topico_id, base_seg)
         seg_restantes = timer_data['restante']
-        # NOVO (30/10/2026): o relógio da tela roda no próprio celular/computador, calculado a partir
-        # do horário em que o bloco termina (guardado no banco). Assim ele NÃO para quando a tela
-        # apaga, quando você sai da página ou quando a internet cai: ao voltar, mostra o tempo certo.
+        # o relógio roda no próprio aparelho (não para quando a tela apaga ou a internet cai)
         mostrar_relogio(seg_restantes, timer_data['status'] == 'RODANDO')
         if seg_restantes < 0 and -seg_restantes >= 3600:
             st.warning("⚠️ Já passou 1 hora além do previsto. Se esqueceu o cronômetro ligado, toque em ⏸️ Pausar "
-                       "ou 🔄 Zerar; os minutos também podem ser corrigidos em 🗓️ Cronograma Semanal.")
+                       "ou 🔄 Zerar; os minutos também podem ser corrigidos em 🗓️ Cronograma.")
         c1, c2, c3 = st.columns(3)
         with c1:
             if st.button("▶️ Iniciar / Continuar", key=f"cr_start_{topico_id}"):
@@ -2970,25 +2870,13 @@ def cartao_bloco(conn, row, meta_id, mostrar_data=False, expandido=None):
                 set_timer_stop(topico_id)
                 st.rerun()
         minutos_cronometrados = max(0, round((base_seg - seg_restantes) / 60)) if timer_data['status'] != 'STOPPED' else 0
+        minutos_ja = int(row['minutos_estudados'] or 0)
 
-        # NOVO (10/11/2026): pedido pronto para o Claude gerar o caderno de questões em PDF deste bloco
-        if row['materia'] != RED and st.toggle("📋 Gerar pedido do caderno de questões (PDF)", key=f"cad_tg_{topico_id}"):
-            n_q = st.select_slider("Quantidade de questões", options=[10, 20, 30, 40, 50], value=40,
-                                   key=f"cad_n_{topico_id}")
-            _ped = texto_pedido_caderno(row, orientacao, anot, n_q, estudado_txt)
-            botao_copiar(_ped, f"cad_{topico_id}")
-            st.caption("Depois de copiar, abra a conversa com o Claude no projeto CONCURSO CBMPE e cole. "
-                       "Ele devolve o PDF com gabarito e comentários no final.")
-            with st.expander("👀 Ver o texto do pedido"):
-                st.text_area("Pedido", value=_ped, height=220, key=f"cad_txt_{topico_id}_{n_q}",
-                             label_visibility="collapsed",
-                             help="Se o botão não copiar, toque e segure no texto, escolha 'Selecionar tudo' e depois 'Copiar'.")
-
-        # NOVO: questões feitas neste bloco (gravadas junto ao concluir, ou no botão próprio)
+        # ---------------- 3. antes de marcar (questões / redação / onde parei) ----------------
         versao = st.session_state.get(f"q_ver_{topico_id}", 0)
         e_redacao = row['materia'] == RED
         if e_redacao:
-            # NOVO (09/11/2026): bloco de redação não tem questões; registra a CORREÇÃO (notas do edital)
+            # bloco de redação não tem questões; registra a CORREÇÃO (notas do edital)
             q_total = q_erros = 0
             _ja_red = None
             if _prop:
@@ -2998,22 +2886,26 @@ def cartao_bloco(conn, row, meta_id, mostrar_data=False, expandido=None):
                 st.success(f"✍️ Correção desta redação já registrada: **{_ja_red[0]:g}/30** "
                            f"({_ja_red[1][8:10]}/{_ja_red[1][5:7]}). Veja a evolução em ✍️ Redações.")
             else:
-                st.markdown("**✍️ Correção desta redação**")
-                st.caption("1) Escreva à mão no tempo do cronômetro. 2) Fotografe e envie ao Claude pedindo a correção. "
-                           "3) Copie a resposta inteira e cole aqui. O app guarda a nota e conclui o bloco.")
+                st.caption("✍️ Escreva à mão no tempo do cronômetro, fotografe e envie ao Claude pedindo a correção. "
+                           "Depois cole a resposta em 📥 abaixo: o app guarda a nota e conclui o bloco.")
                 if st.toggle("📥 Registrar a correção agora", key=f"red_tg_{topico_id}"):
                     form_registrar_redacao(conn, f"bl_{topico_id}", _prop['tema'] if _prop else "", topico_id)
-        else:
-            st.markdown("**📝 Questões deste bloco** (opcional)")
+        elif not concluido:
             q1, q2 = st.columns(2)
             with q1:
-                q_total = st.number_input("Questões feitas", min_value=0, max_value=500, value=0, step=1,
+                q_total = st.number_input("📝 Questões feitas (opcional)", min_value=0, max_value=500, value=0, step=1,
                                           key=f"q_tot_{topico_id}_{versao}")
             with q2:
                 q_erros = st.number_input("Quantas errei", min_value=0, max_value=500, value=0, step=1,
                                           key=f"q_err_{topico_id}_{versao}")
             if q_erros > q_total:
                 st.warning("O número de erros não pode ser maior que o de questões feitas.")
+        else:
+            q_total = q_erros = 0
+        onde_parei = anot
+        if not concluido and not e_redacao:
+            onde_parei = st.text_input("📍 Onde parei (só se não terminou: art. 18, página 40, vídeo 3...)",
+                                       value=anot, key=f"anot_{topico_id}")
 
         def _gravar_questoes():
             """Grava as questões digitadas (se houver). Devolve texto para o aviso, ou None se houve erro."""
@@ -3022,20 +2914,11 @@ def cartao_bloco(conn, row, meta_id, mostrar_data=False, expandido=None):
             if q_erros > q_total:
                 avisar("Questões NÃO registradas: há mais erros do que questões feitas.", "error")
                 return None
-            c = conn.cursor()
-            c.execute("INSERT INTO exercicios (data, topico_id, acertos, erros) VALUES (?, ?, ?, ?)",
-                      (hoje_local().isoformat(), topico_id, int(q_total - q_erros), int(q_erros)))
+            conn.execute("INSERT INTO exercicios (data, topico_id, acertos, erros) VALUES (?, ?, ?, ?)",
+                         (hoje_local().isoformat(), topico_id, int(q_total - q_erros), int(q_erros)))
             conn.commit()
             st.session_state[f"q_ver_{topico_id}"] = versao + 1  # limpa os campos
             return f" Questões: {q_total - q_erros} acertos e {q_erros} erros registrados."
-
-        if not e_redacao and st.button("💾 Registrar só as questões", key=f"q_salvar_{topico_id}"):
-            txt = _gravar_questoes()
-            if txt:
-                avisar("Salvo e conferido." + txt)
-            elif txt == "":
-                avisar("Nada foi salvo: informe quantas questões fez.", "warning")
-            st.rerun()
 
         def _salvar_estudado_digitado():
             """Se escreveu em '📝 O que estudei' e não salvou, salva junto ao concluir/parcial."""
@@ -3043,13 +2926,18 @@ def cartao_bloco(conn, row, meta_id, mostrar_data=False, expandido=None):
             if registrar_estudado(conn, topico_id, st.session_state.get(f"est_txt_{topico_id}_{ver_e}", "")):
                 st.session_state[f"est_ver_{topico_id}"] = ver_e + 1
 
-        minutos_ja = int(row['minutos_estudados'] or 0)
-        # NOVO (01/11/2026): registrar até onde chegou quando não termina o bloco
-        onde_parei = st.text_input("📍 Onde parei (opcional, ex.: art. 18; página 40; meio do vídeo 3)",
-                                   value=anot, key=f"anot_{topico_id}")
-        col_a, col_b = st.columns(2)
-        with col_a:
-            if st.button("✅ Concluí este bloco", key=f"cr_conc_{topico_id}"):
+        # ---------------- 4. os 4 desfechos ----------------
+        pode_base = (not concluido and not e_redacao
+                     and not topico_sem_prefixo(row['nome']).startswith(PREFIXO_BASE))
+        if not concluido:
+            st.markdown("**Como foi este bloco?**")
+            d1, d2, d3, d4 = st.columns(4)
+        else:
+            d1, d2 = st.columns(2)
+            d3 = d4 = None
+        with d1:
+            if st.button("✅ Concluí", key=f"cr_conc_{topico_id}", type="primary" if not concluido else "secondary",
+                         width="stretch", help="Estudei o conteúdo do edital deste bloco."):
                 _salvar_estudado_digitado()
                 txt = _gravar_questoes()
                 if txt is not None:
@@ -3062,38 +2950,188 @@ def cartao_bloco(conn, row, meta_id, mostrar_data=False, expandido=None):
                         st.session_state.setdefault("_avisos", []).append(("success", txt.strip()))
                     set_timer_stop(topico_id)
                 st.rerun()
-        with col_b:
-            if st.button("⏳ Fiz só uma parte", key=f"cr_parc_{topico_id}"):
+        with d2:
+            if st.button("⏳ Fiz parte", key=f"cr_parc_{topico_id}", width="stretch",
+                         help="Estudei só uma parte do conteúdo do edital. Anote em 📍 onde parou."):
                 _salvar_estudado_digitado()
                 txt = _gravar_questoes()
                 if txt is not None:
-                    conn.execute("UPDATE topicos SET anotacao = ? WHERE id = ?", (onde_parei.strip() or None, topico_id))
+                    conn.execute("UPDATE topicos SET anotacao = ? WHERE id = ?", ((onde_parei or "").strip() or None, topico_id))
                     conn.commit()
                     salvar_status_com_aviso(conn, topico_id, "Parcial", minutos_ja + minutos_cronometrados)
-                    if onde_parei.strip():
+                    if (onde_parei or "").strip():
                         st.session_state.setdefault("_avisos", []).append(("success", f"📍 Anotado: {onde_parei.strip()}"))
                     if txt:
                         st.session_state.setdefault("_avisos", []).append(("success", txt.strip()))
                     set_timer_stop(topico_id)
                 st.rerun()
-        # NOVO (17/11/2026): escolher não estudar este bloco hoje
-        if row['status'] != "Concluído":
-            if st.button("📆 Hoje não: adiar este bloco", key=f"cr_adiar_{topico_id}",
-                         help="Tira o bloco de hoje e encaixa mais adiante no cronograma. Nada é apagado: "
-                              "minutos e questões já registrados continuam no bloco."):
-                try:
-                    if minutos_cronometrados > 0:   # o que já cronometrou não se perde
-                        salvar_status_com_aviso(conn, topico_id, "Parcial", minutos_ja + minutos_cronometrados)
-                    set_timer_stop(topico_id)
-                    nova = adiar_bloco(conn, meta_id, topico_id)
-                    avisar(f"📆 Bloco adiado: \"{row['materia']}\" agora está em {DIAS_ABREV[nova.weekday()]} {nova:%d/%m}."
-                           + (" Se mudar de ideia, use ↩️ Desfazer no topo do dia (vale só hoje)."
-                              if escala_ativa(meta_id) else ""))
-                except Exception as e:
-                    avisar(f"NÃO foi adiado. Erro: {e}", "error")
-                st.rerun()
+        if d3 is not None:
+            with d3:
+                if pode_base and st.button("🧱 Estudei a base", key=f"base_abrir_{topico_id}", width="stretch",
+                                           help="Estudei um pré-requisito fora do edital: o tempo conta, e o bloco continua."):
+                    st.session_state[f"base_aberto_{topico_id}"] = not st.session_state.get(f"base_aberto_{topico_id}", False)
+                    st.rerun()
+            with d4:
+                if st.button("📆 Hoje não", key=f"cr_adiar_{topico_id}", width="stretch",
+                             help="Tira o bloco de hoje e encaixa mais adiante. Nada é apagado."):
+                    try:
+                        if minutos_cronometrados > 0:   # o que já cronometrou não se perde
+                            salvar_status_com_aviso(conn, topico_id, "Parcial", minutos_ja + minutos_cronometrados)
+                        set_timer_stop(topico_id)
+                        nova = adiar_bloco(conn, meta_id, topico_id)
+                        avisar(f"📆 Bloco adiado: \"{row['materia']}\" agora está em {DIAS_ABREV[nova.weekday()]} {nova:%d/%m}."
+                               + (" Se mudar de ideia, use ↩️ Desfazer no topo de 📅 Hoje (vale só hoje)."
+                                  if escala_ativa(meta_id) else ""))
+                    except Exception as e:
+                        avisar(f"NÃO foi adiado. Erro: {e}", "error")
+                    st.rerun()
+
+        # formulário da base (abre ao tocar em 🧱)
+        if pode_base and st.session_state.get(f"base_aberto_{topico_id}"):
+            with st.container(border=True):
+                st.markdown("🧱 **Estudo de base (pré-requisito fora do edital)**")
+                st.caption("O tempo conta como estudo de hoje, num registro à parte. ESTE bloco continua pendente com o "
+                           "tempo inteiro e o app reencaixa ele no cronograma.")
+                txt_base = st.text_area("O que você estudou de base", key=f"base_txt_{topico_id}", height=80,
+                                        placeholder="Ex.: bases moleculares da vida: água, sais minerais, glicídios, lipídios.")
+                b1, b2, b3 = st.columns([1, 1, 1])
+                min_base = b1.number_input("Minutos usados", min_value=0, max_value=600,
+                                           value=int(minutos_cronometrados or minutos_plan), step=5,
+                                           key=f"base_min_{topico_id}")
+                with b2:
+                    st.write("")
+                    if st.button("✔️ Registrar base", key=f"base_btn_{topico_id}", type="primary"):
+                        try:
+                            registrar_base(conn, meta_id, topico_id, txt_base, min_base)
+                            set_timer_stop(topico_id)
+                            st.session_state[f"base_aberto_{topico_id}"] = False
+                            avisar(f"🧱 Base registrada: {int(min_base)} min contados como estudo de hoje. O bloco "
+                                   f"\"{topico_sem_prefixo(row['nome'])[:50]}\" continua pendente e será reencaixado "
+                                   "(amanhã o app reorganiza sozinho, ou toque em 📆 Hoje não para adiar já).")
+                        except Exception as e:
+                            avisar(f"NÃO foi registrado: {e}.", "error")
+                        st.rerun()
+                with b3:
+                    st.write("")
+                    if st.button("Cancelar", key=f"base_cancel_{topico_id}"):
+                        st.session_state[f"base_aberto_{topico_id}"] = False
+                        st.rerun()
+
+        # ---------------- 5. mais opções ----------------
+        if st.toggle("➕ Mais opções (o que estudei e IA · caderno · orientação)", key=f"mais_{topico_id}"):
+            with st.container(border=True):
+                # 📝 o que estudei + IA
+                _outros = estudado_na_materia(conn, topico_id, 2) if not concluido else []
+                if _outros:
+                    st.caption("📚 **Você já registrou nesta matéria:** " + " · ".join(
+                        f"{topico_sem_prefixo(n)[:40]}: {e.strip().splitlines()[-1][7:][:120]}" for n, e in _outros))
+                st.markdown("**📝 O que estudei neste bloco**")
+                if estudado_txt:
+                    st.markdown("\n".join(f"- {l}" for l in estudado_txt.splitlines() if l.strip()))
+                ver_e = st.session_state.get(f"est_ver_{topico_id}", 0)
+                novo_est = st.text_area("Escreva o que você estudou (assuntos, páginas, aulas, dúvidas)",
+                                        key=f"est_txt_{topico_id}_{ver_e}", height=90,
+                                        placeholder="Ex.: Amabis & Martho, vol. 1, cap. 3 – A química da vida: água, sais "
+                                                    "minerais, glicídios, lipídios, proteínas. (Se citar livro ou aula, "
+                                                    "escreva também os assuntos do sumário.)")
+                e1, e2 = st.columns(2)
+                with e1:
+                    if st.button("💾 Salvar o que estudei", key=f"est_salvar_{topico_id}"):
+                        try:
+                            if registrar_estudado(conn, topico_id, novo_est):
+                                st.session_state[f"est_ver_{topico_id}"] = ver_e + 1
+                                avisar("Registro salvo. Ele entra no pedido do caderno de questões e na análise da IA.")
+                            else:
+                                avisar("Nada foi salvo: escreva o que estudou.", "warning")
+                        except Exception as e:
+                            avisar(f"NÃO foi salvo. Erro: {e}", "error")
+                        st.rerun()
+                with e2:
+                    if st.button("🤖 Analisar com a IA", key=f"est_ia_{topico_id}"):
+                        try:
+                            if _gemini_cfg()[0] is None:
+                                raise RuntimeError("o app não encontrou a GEMINI_API_KEY nos Secrets. Confira se a linha "
+                                                   "foi colada no começo dos Secrets, entre aspas, e salva")
+                            if novo_est.strip():
+                                registrar_estudado(conn, topico_id, novo_est)
+                                st.session_state[f"est_ver_{topico_id}"] = ver_e + 1
+                            tudo = conn.execute("SELECT estudado FROM topicos WHERE id = ?", (topico_id,)).fetchone()[0] or ""
+                            if not tudo.strip():
+                                avisar("Escreva primeiro o que estudou; a IA analisa a partir disso.", "warning")
+                            else:
+                                with st.spinner("A IA está analisando o seu bloco..."):
+                                    resp = gemini_texto(prompt_analise_bloco(conn, row, orientacao, tudo))
+                                conn.execute("UPDATE topicos SET analise_ia = ? WHERE id = ?",
+                                             (f"{hoje_local():%d/%m}\n{resp}", topico_id))
+                                conn.commit()
+                                avisar("Análise da IA pronta: veja no bloco, em ➕ Mais opções.")
+                        except Exception as e:
+                            avisar(f"A IA não respondeu: {e}.", "error")
+                        st.rerun()
+                if _anal:
+                    _data_a, _, _txt_a = _anal.partition("\n")
+                    st.markdown(f"🤖 **Análise da IA ({_data_a})**\n\n{_txt_a}")
+                    st.caption("A IA pode errar: use como orientação e confira com o material do curso.")
+                _ch, _mod = _gemini_cfg()
+                st.caption(f"🔑 Chave do Gemini: **encontrada** (modelo {_mod})." if _ch else
+                           "🔑 Chave do Gemini: **não encontrada** nos Secrets do app. A análise da IA só funciona com ela.")
+
+                # 📋 pedido do caderno
+                if not e_redacao:
+                    st.divider()
+                    st.markdown("**📋 Pedido do caderno de questões (PDF)**")
+                    n_q = st.select_slider("Quantidade de questões", options=[10, 20, 30, 40, 50], value=40,
+                                           key=f"cad_n_{topico_id}")
+                    _ped = texto_pedido_caderno(row, orientacao, anot, n_q, estudado_txt)
+                    botao_copiar(_ped, f"cad_{topico_id}")
+                    st.caption("Depois de copiar, abra a conversa com o Claude no projeto CONCURSO CBMPE e cole. "
+                               "Ele devolve o PDF com gabarito e comentários no final.")
+                    if st.toggle("👀 Ver o texto do pedido", key=f"cad_ver_{topico_id}"):
+                        st.text_area("Pedido", value=_ped, height=220, key=f"cad_txt_{topico_id}_{n_q}",
+                                     label_visibility="collapsed",
+                                     help="Se o botão não copiar, toque e segure no texto, escolha 'Selecionar tudo' e depois 'Copiar'.")
+
+                # 💾 só as questões (sem mudar o status)
+                if not e_redacao and not concluido:
+                    st.divider()
+                    if st.button("💾 Registrar só as questões (sem mudar o status do bloco)", key=f"q_salvar_{topico_id}"):
+                        txt = _gravar_questoes()
+                        if txt:
+                            avisar("Salvo e conferido." + txt)
+                        elif txt == "":
+                            avisar("Nada foi salvo: informe quantas questões fez (nos campos acima).", "warning")
+                        st.rerun()
+
+                # ✏️ orientação
+                st.divider()
+                if st.toggle("✏️ Escrever ou editar a orientação", key=f"ori_tg_{topico_id}"):
+                    novo_txt = st.text_area("Orientação", value=orientacao, height=150,
+                                            key=f"ori_{topico_id}", label_visibility="collapsed")
+                    if st.button("💾 Salvar orientação", key=f"ori_salvar_{topico_id}"):
+                        try:
+                            salvar_orientacao(conn, row['materia'], row['nome'], novo_txt)
+                            ok = buscar_orientacao(conn, row['materia'], row['nome']) == novo_txt.strip()
+                            avisar("Orientação salva e conferida." if ok else
+                                   "Orientação apagada." if not novo_txt.strip() else
+                                   "A orientação não foi confirmada no banco. Tente de novo.",
+                                   "success" if ok or not novo_txt.strip() else "error")
+                        except Exception as e:
+                            avisar(f"Orientação NÃO salva. Erro: {e}", "error")
+                        st.rerun()
     return timer_data['status'] == 'RODANDO'
 
+
+def escolher_objetivo(opcoes, label="Objetivo:", key=None):
+    """NOVO (17/11/2026): com um objetivo só, escolhe sozinho (sem caixa de seleção)."""
+    opcoes = list(opcoes)
+    if len(opcoes) == 1:
+        return opcoes[0]
+    return st.selectbox(label, opcoes, key=key)
+
+def onde_reorganizar(meta_id):
+    """Texto com o botão certo para reorganizar, conforme a escala esteja ligada ou não."""
+    return ("o botão '🔁 Reorganizar agora' no topo de 📅 Hoje" if escala_ativa(meta_id)
+            else "'🔁 Fiquei para trás' em 🗓️ Cronograma")
 
 def _fmt_h(minutos):
     h, m = divmod(int(minutos), 60)
@@ -3110,42 +3148,52 @@ def painel_escala_hoje(conn, meta_id, cfg):
         "pos": f"Meta leve de **{_fmt_h(meta)}**. Descanse primeiro; os blocos de hoje são de fixação (revisão, lei seca).",
         "livre": f"Meta de **{_fmt_h(meta)}**. É o dia do conteúdo novo e mais pesado.",
         "folga": "Dia marcado como sem estudo. Descanse sem culpa: o plano já conta com isso."}
-    (st.info if tipo in ("servico", "folga") else st.success)(f"**Hoje: {TIPOS_DIA[tipo]}.** {textos[tipo]}")
-    # ↩️ desfazer a reorganização automática de hoje
-    if desfazer_disponivel(meta_id):
-        with st.container(border=True):
-            st.write("🔁 **O cronograma foi reorganizado hoje** (pelo app, com o que tinha ficado pendente, ou porque "
-                     "você adiou um bloco). Se quiser voltar atrás, desfaça; se tinha estudado e só esqueceu de marcar, "
-                     "marque nas abas ⏪ o que estudou e reorganize de novo.")
-            if st.button("↩️ Desfazer a reorganização de hoje", key="desf_auto"):
-                try:
-                    n = desfazer_reorganizacao(conn, meta_id)
-                    avisar(f"Desfeito: {n} blocos voltaram para as datas de antes. Marque o que estudou nas abas ⏪ "
-                           "e depois toque em 🔁 Reorganizar agora.")
-                except Exception as e:
-                    avisar(f"NÃO foi desfeito. Erro: {e}", "error")
-                st.rerun()
-    if blocos_atrasados(conn, meta_id, hoje).shape[0] and not desfazer_disponivel(meta_id):
-        if st.button("🔁 Reorganizar agora (depois de marcar o que estudou)", key="reorg_agora"):
-            try:
-                _foto_cronograma(conn, meta_id)
-                r = aplicar_pela_escala(conn, meta_id, hoje, cfg)
-                avisar(("Cronograma reorganizado a partir de hoje. Retirados para caber: " + resumo_cortes_escala(r) + ".")
-                       if "erro" not in r else "🔁 " + r["erro"], "success" if "erro" not in r else "warning")
-            except Exception as e:
-                avisar(f"NÃO foi reorganizado. Erro: {e}", "error")
-            st.rerun()
-    # 📉 alarme da revisão final
-    rev_txt, nivel = texto_revisao_final(conn, meta_id)
-    if rev_txt:
-        {"ok": st.caption, "atencao": st.warning, "critico": st.error}[nivel](("📉 " if nivel != "ok" else "📘 ") + rev_txt)
-    # ⚠️ plantão na véspera da prova (só no CFO)
+    # NOVO (17/11/2026): um painel único no topo, com no máximo 3 avisos (o mais importante primeiro)
+    alertas = []   # (prioridade, texto) — menor número = mais importante
     if conn.execute("SELECT 1 FROM metas WHERE id = ? AND nome = ?", (int(meta_id), CRONO_META_NOME)).fetchone():
         vespera = DATA_PROVA_CFO - datetime.timedelta(days=1)
         if tipo_do_dia(cfg, vespera) == "servico" and hoje <= vespera:
-            st.warning(f"⚠️ Pela sua escala, o plantão cai em **{vespera:%d/%m} (véspera da prova)** e você sairia às 7h do "
-                       f"dia da prova ({DATA_PROVA_CFO:%d/%m}). Vale pedir troca ou dispensa com antecedência. Se conseguir, "
-                       "marque o dia em '🚨 Mudou algo?' abaixo.")
+            alertas.append((1, f"⚠️ O plantão cai em **{vespera:%d/%m}, véspera da prova**. Peça troca ou dispensa com "
+                               "antecedência; se conseguir, marque o dia em 🚨 Mudou algo?"))
+    rev_txt, nivel = texto_revisao_final(conn, meta_id)
+    if rev_txt and nivel != "ok":
+        alertas.append((0 if nivel == "critico" else 2, "📉 " + rev_txt))
+    reorganizado = bool(desfazer_disponivel(meta_id))
+    n_atr = blocos_atrasados(conn, meta_id, hoje).shape[0]
+    if reorganizado:
+        alertas.append((3, "🔁 O cronograma foi **reorganizado hoje** (pelo app ou porque você adiou um bloco)."))
+    elif n_atr:
+        alertas.append((2, f"⏪ {n_atr} bloco(s) de dias anteriores sem concluir. Marque nas abas ⏪ o que estudou e "
+                           "toque em 🔁 Reorganizar."))
+    alertas.sort(key=lambda x: x[0])
+    with st.container(border=True):
+        st.markdown(f"**Hoje: {TIPOS_DIA[tipo]}.** {textos[tipo]}")
+        for _, txt_al in alertas[:3]:
+            st.markdown(txt_al)
+        if len(alertas) > 3:
+            st.caption(f"+{len(alertas) - 3} aviso(s) menos urgente(s).")
+        if reorganizado:
+            if st.button("↩️ Desfazer a reorganização de hoje", key="desf_auto",
+                         help="Volta os blocos para as datas de antes. O que você marcou como estudado continua."):
+                try:
+                    n = desfazer_reorganizacao(conn, meta_id)
+                    avisar(f"Desfeito: {n} blocos voltaram para as datas de antes. Marque o que estudou nas abas ⏪ "
+                           "e depois toque em 🔁 Reorganizar.")
+                except Exception as e:
+                    avisar(f"NÃO foi desfeito. Erro: {e}", "error")
+                st.rerun()
+        elif n_atr:
+            if st.button("🔁 Reorganizar agora (depois de marcar o que estudou)", key="reorg_agora"):
+                try:
+                    _foto_cronograma(conn, meta_id)
+                    r = aplicar_pela_escala(conn, meta_id, hoje, cfg)
+                    avisar(("Cronograma reorganizado a partir de hoje. Retirados para caber: " + resumo_cortes_escala(r) + ".")
+                           if "erro" not in r else "🔁 " + r["erro"], "success" if "erro" not in r else "warning")
+                except Exception as e:
+                    avisar(f"NÃO foi reorganizado. Erro: {e}", "error")
+                st.rerun()
+        if rev_txt and nivel == "ok":
+            st.caption("📘 " + rev_txt)
     prox = []
     for k in range(1, 5):
         d = hoje + datetime.timedelta(days=k)
@@ -3177,7 +3225,7 @@ def painel_escala_hoje(conn, meta_id, cfg):
             st.rerun()
 
 def tela_config_escala(conn, meta_id):
-    """Configuração da escala (aparece em 🗓️ Cronograma Semanal)."""
+    """Configuração da escala (aparece em 🗓️ Cronograma)."""
     cfg = ler_escala(meta_id)
     hoje = hoje_local()
     titulo = ("🚓 Minha escala de serviço: " + ("LIGADA" if cfg["ativa"] else "desligada"))
@@ -3249,16 +3297,14 @@ def tela_config_escala(conn, meta_id):
             avisar("Escala desligada. Os blocos continuam nos dias em que estão; use '🔁 Fiquei para trás' se precisar.", "info")
             st.rerun()
 
+# NOVO (17/11/2026): menu enxuto (7 itens). Simulados e Desempenho ganharam abas; Planejar foi para o Gerenciador.
 menu = st.sidebar.radio("Navegação", [
-    "📅 Meta & Rotina do Dia",
-    "🧭 Planejar Estudos",
-    "🗓️ Cronograma Semanal",
-    "🎯 Simulado do que já estudei",
-    "🏁 Meus Simulados",
-    "📝 Registrar Questões", 
+    "📅 Hoje",
+    "🗓️ Cronograma",
+    "📝 Questões",
+    "🏁 Simulados",
     "✍️ Redações",
-    "📊 Dashboard de Evolução", 
-    "🧠 Análise e ajuste",
+    "📊 Desempenho",
     "⚙️ Gerenciador"
 ])
 if _usuario():
@@ -3431,15 +3477,15 @@ sincronizar_se_mudou()
 # =============================================================================
 # MENU 1: META & ROTINA DO DIA
 # =============================================================================
-if menu == "📅 Meta & Rotina do Dia":
-    st.header("🎯 Sugestão Diária de Estudo e Rotina Policial")
+def _pg_hoje():
+    st.header("📅 Hoje")
     
     df_metas = pd.read_sql_query("SELECT id, nome FROM metas WHERE ativa = 1", conn)
     
     if df_metas.empty:
         st.warning("Nenhum objetivo cadastrado. Carregue o cronograma em ⚙️ Gerenciador → 📅 Cronogramas.")
     else:
-        meta_sel_rotina = st.selectbox("Selecione o Objetivo do Dia:", df_metas['nome'].tolist())
+        meta_sel_rotina = escolher_objetivo(df_metas['nome'].tolist(), "Objetivo:", "obj_hoje")
         meta_id_rotina = df_metas[df_metas['nome'] == meta_sel_rotina]['id'].values[0]
 
         # NOVO: se o objetivo tem cronograma, mostra os blocos de hoje
@@ -3521,14 +3567,14 @@ if menu == "📅 Meta & Rotina do Dia":
             conn.close()
             st.stop()
 
-        st.info("Este objetivo ainda não tem cronograma. Gere em 🧭 Planejar Estudos ou importe em ⚙️ Gerenciador → 📅 Cronogramas.")
+        st.info("Este objetivo ainda não tem cronograma. Gere em ⚙️ Gerenciador → 🧭 Planejar concurso novo ou importe em ⚙️ Gerenciador → 📅 Cronogramas.")
 
 # =============================================================================
 # MENU 2: CHECKLIST & ACOMPANHAMENTO
 # =============================================================================
-elif menu == "🧭 Planejar Estudos":
+def _pg_planejar():
     import json as _json
-    st.header("🧭 Planejar Estudos")
+    st.subheader("🧭 Planejar um concurso novo")
     st.write("Marque o quanto você já sabe de cada matéria e a prioridade dela. "
              "O app distribui as horas até a véspera da prova e monta o cronograma.")
     df_ed = pd.read_sql_query("SELECT id, nome, conteudo, ajustes FROM editais ORDER BY id DESC", conn)
@@ -3536,8 +3582,8 @@ elif menu == "🧭 Planejar Estudos":
         tem_cfo = conn.execute("SELECT 1 FROM metas WHERE nome = ?", (CRONO_META_NOME,)).fetchone()
         if tem_cfo:
             st.success("✅ Seu cronograma do CFO CBMPE já está montado e em andamento. Acompanhe em "
-                       "'📅 Meta & Rotina do Dia' e '🗓️ Cronograma Semanal'. Se atrasar, use o botão "
-                       "'🔁 Fiquei para trás' em '🗓️ Cronograma Semanal'.")
+                       "'📅 Hoje' e '🗓️ Cronograma'. Se atrasar, o app reorganiza sozinho (escala ligada) ou "
+                       "use '🔁 Fiquei para trás' em '🗓️ Cronograma'.")
             st.info("ℹ️ Esta tela serve só para montar o cronograma de um **concurso novo**. Para isso, peça ao "
                     "Claude o arquivo do edital e envie em '⚙️ Gerenciador' → aba '📅 Cronogramas' → '📤 Importar'.")
         else:
@@ -3648,13 +3694,13 @@ elif menu == "🧭 Planejar Estudos":
                     n = carregar_cronograma(conn, edital["objetivo"], inicio_seg, itens_plan, edital.get("tipo", "Concurso"),
                                             substituir=existe_meta)
                     set_config("horas_estudo_dia", horas_plan)
-                    avisar(f"Cronograma gerado: {n} blocos. Veja em '🗓️ Cronograma Semanal' e em '📅 Meta & Rotina do Dia'.")
+                    avisar(f"Cronograma gerado: {n} blocos. Veja em '🗓️ Cronograma' e em '📅 Hoje'.")
                     st.rerun()
         else:
             st.info("Marque suas matérias e toque em **📊 Calcular distribuição do tempo**.")
 
-elif menu == "🗓️ Cronograma Semanal":
-    st.header("🗓️ Cronograma Semanal")
+def _pg_cronograma():
+    st.header("🗓️ Cronograma")
 
     df_metas = pd.read_sql_query("SELECT id, nome FROM metas WHERE ativa = 1", conn)
     metas_crono = [r for _, r in df_metas.iterrows() if meta_tem_cronograma(r['id'], conn)]
@@ -3663,7 +3709,7 @@ elif menu == "🗓️ Cronograma Semanal":
         st.info("Nenhum cronograma carregado ainda. Vá em '⚙️ Gerenciador' → aba '📅 Cronogramas' e carregue ou importe um cronograma.")
     else:
         nomes_crono = [r['nome'] for r in metas_crono]
-        meta_sel_cr = st.selectbox("Objetivo:", nomes_crono)
+        meta_sel_cr = escolher_objetivo(nomes_crono, "Objetivo:", "obj_crono")
         meta_id_cr = int([r['id'] for r in metas_crono if r['nome'] == meta_sel_cr][0])
 
         semana_hoje, _ = semana_e_dia_de_hoje(meta_id_cr)
@@ -3780,16 +3826,16 @@ elif menu == "🗓️ Cronograma Semanal":
 # =============================================================================
 # MENU 3: REGISTRAR QUESTÕES
 # =============================================================================
-elif menu == "🎯 Simulado do que já estudei":
+def _pg_sim_pedir():
     import json as _json
-    st.header("🎯 Simulado do que já estudei")
+    st.subheader("🎯 Pedir um simulado do que já estudei")
     st.write("O app junta os assuntos que você marcou como estudados e monta um pedido de simulado. "
              "Copie o pedido e cole na conversa com o Claude: ele cria o simulado só com esses assuntos.")
     df_metas = pd.read_sql_query("SELECT id, nome FROM metas WHERE ativa = 1", conn)
     if df_metas.empty:
         st.info("Nenhum objetivo cadastrado ainda.")
     else:
-        meta_sim = st.selectbox("Objetivo:", df_metas["nome"].tolist())
+        meta_sim = escolher_objetivo(df_metas["nome"].tolist(), "Objetivo:", "obj_simped")
         meta_sim_id = int(df_metas[df_metas["nome"] == meta_sim]["id"].values[0])
         
         # pesos e banca vindos do edital salvo (se houver)
@@ -3822,7 +3868,7 @@ elif menu == "🎯 Simulado do que já estudei":
         estudados = assuntos_estudados(conn, meta_sim_id, incluir_parc)
         if not estudados:
             st.warning("Nenhum assunto marcado como estudado ainda. Marque os blocos como 'Concluído' "
-                       "em '📅 Meta & Rotina do Dia' ou '🗓️ Cronograma Semanal'.")
+                       "em '📅 Hoje' ou '🗓️ Cronograma'.")
         else:
             todas = materias_edital or list(estudados)
             escolhidas = st.multiselect("Matérias que entram no simulado:", list(estudados), default=list(estudados))
@@ -3864,16 +3910,16 @@ elif menu == "🎯 Simulado do que já estudei":
             st.download_button("⬇️ Baixar o pedido (.txt)", data=pedido,
                                file_name=f"pedido_simulado_{hoje_local():%Y-%m-%d}.txt", mime="text/plain")
 
-elif menu == "🏁 Meus Simulados":
+def _pg_sim_resultados():
     import altair as alt
-    st.header("🏁 Meus Simulados")
+    st.subheader("📥 Resultados dos simulados")
     st.caption("Só entram aqui os simulados, feitos sem consulta. As questões do dia a dia continuam em "
-               "📊 Dashboard de Evolução, separadas.")
+               "📊 Desempenho → 📈 Evolução, separadas.")
     df_metas = pd.read_sql_query("SELECT id, nome FROM metas WHERE ativa = 1", conn)
     if df_metas.empty:
         st.info("Nenhum objetivo cadastrado ainda.")
     else:
-        meta_s = st.selectbox("Objetivo", df_metas["nome"].tolist()) if len(df_metas) > 1 else df_metas["nome"].iloc[0]
+        meta_s = escolher_objetivo(df_metas["nome"].tolist(), "Objetivo:", "obj_simres")
         meta_s_id = int(df_metas[df_metas["nome"] == meta_s]["id"].values[0])
         sims, itens = dados_simulados(conn, meta_s_id)
         with st.expander("📥 Lançar um simulado (colar o texto do “Copiar resultado”)", expanded=sims.empty):
@@ -4051,18 +4097,18 @@ elif menu == "🏁 Meus Simulados":
                     avisar(f"Simulado apagado: {esc}.")
                     st.rerun()
 
-elif menu == "📝 Registrar Questões":
-    st.header("📝 Registro de Desempenho em Exercícios")
+def _pg_questoes():
+    st.header("📝 Questões")
     
     df_metas = pd.read_sql_query("SELECT id, nome FROM metas WHERE ativa = 1", conn)
     
     if df_metas.empty:
         st.warning("Cadastre um Objetivo e Matérias no menu '⚙️ Gerenciador' antes de lançar exercícios.")
     else:
-        meta_sel = st.selectbox("Selecione o Objetivo", df_metas['nome'].tolist())
+        meta_sel = escolher_objetivo(df_metas['nome'].tolist(), "Objetivo:", "obj_quest")
         meta_id = df_metas[df_metas['nome'] == meta_sel]['id'].values[0]
 
-        st.caption("Resultado de simulado não entra aqui: lance em 🏁 Meus Simulados, que acompanha os simulados à parte.")
+        st.caption("Resultado de simulado não entra aqui: lance em 🏁 Simulados, que acompanha os simulados à parte.")
 
         df_mat = pd.read_sql_query("SELECT id, nome FROM materias WHERE meta_id = ?", conn, params=(int(meta_id),))
         
@@ -4144,9 +4190,9 @@ elif menu == "📝 Registrar Questões":
 # =============================================================================
 # MENU: REDAÇÕES (notas pelos critérios do edital CBMPE 002/2026 – cargo de Oficial)
 # =============================================================================
-elif menu == "✍️ Redações":
+def _pg_redacoes():
     import altair as alt
-    st.header("✍️ Minhas Redações")
+    st.header("✍️ Redações")
 
     ASPECTOS, NOTA_MAX, NOTA_MIN = ASPECTOS_RED, NOTA_MAX_RED, NOTA_MIN_RED
     LINHAS_MIN, LINHAS_MAX = LINHAS_MIN_RED, LINHAS_MAX_RED
@@ -4268,9 +4314,9 @@ elif menu == "✍️ Redações":
 # =============================================================================
 # MENU 4: DASHBOARD DE EVOLUÇÃO
 # =============================================================================
-elif menu == "📊 Dashboard de Evolução":
+def _pg_evolucao():
     import altair as alt
-    st.header("📊 Meu Desempenho")
+    st.subheader("📈 Evolução")
 
     # Cores: status (crítico/fraco/forte) só para o que pede atenção; azul para quantidade; cinza para o resto
     COR_CRITICO, COR_FRACO, COR_FORTE = "#d03b3b", "#fab219", "#0ca30c"
@@ -4285,7 +4331,7 @@ elif menu == "📊 Dashboard de Evolução":
     if df_metas.empty:
         st.warning("Nenhum objetivo ativo. Carregue o cronograma em ⚙️ Gerenciador → 📅 Cronogramas.")
     else:
-        meta_nome = st.selectbox("Objetivo", df_metas['nome'].tolist()) if len(df_metas) > 1 else df_metas['nome'].iloc[0]
+        meta_nome = escolher_objetivo(df_metas['nome'].tolist(), "Objetivo:", "obj_dash")
         m_id = int(df_metas[df_metas['nome'] == meta_nome]['id'].values[0])
         hoje = hoje_local()
         inicio = datetime.date.fromisoformat(get_config(f"cronograma_inicio_{m_id}", CRONO_INICIO.isoformat()))
@@ -4365,7 +4411,7 @@ elif menu == "📊 Dashboard de Evolução":
         alertas = []
         if len(atrasados):
             alertas.append(("warning", f"**{len(atrasados)} bloco(s) atrasado(s)** até ontem. " + ("Com a escala ligada, o app redistribui sozinho ao abrir a rotina."
-                                       if cfg_esc_dash["ativa"] else "Reponha no fim de semana (lista em 🗓️ Cronograma Semanal).")))
+                                       if cfg_esc_dash["ativa"] else "Reponha no fim de semana (lista em 🗓️ Cronograma).")))
         esperado = meta_semana_h * min(dias_uteis_passados, 5) / 5
         if cfg_esc_dash["ativa"]:
             esperado = _ate_hoje_h
@@ -4492,7 +4538,7 @@ elif menu == "📊 Dashboard de Evolução":
         # ---------------- 4. evolução ----------------
         st.subheader("📈 Estou evoluindo?")
         if ex.empty:
-            st.info("Registre questões em 📝 Registrar Questões para ver a sua evolução semana a semana.")
+            st.info("Registre questões em 📝 Questões para ver a sua evolução semana a semana.")
         else:
             ex['semana'] = pd.to_datetime(ex['data'].apply(lambda d: d - datetime.timedelta(days=d.weekday())))
             ev = ex.groupby('semana').agg(acertos=('acertos', 'sum'), total=('total', 'sum')).reset_index()
@@ -4600,9 +4646,9 @@ elif menu == "📊 Dashboard de Evolução":
 # =============================================================================
 # MENU: ANÁLISE E AJUSTE
 # =============================================================================
-elif menu == "🧠 Análise e ajuste":
+def _pg_analise():
     import altair as alt
-    st.header("🧠 Análise e ajuste")
+    st.subheader("🧠 Prioridades e ajuste")
     _opcoes_an = {}
     for _mid, _mnome in conn.execute("SELECT id, nome FROM metas WHERE ativa = 1 ORDER BY id").fetchall():
         _cfg = config_prova(conn, _mid)
@@ -4610,9 +4656,9 @@ elif menu == "🧠 Análise e ajuste":
             _opcoes_an[_mnome] = (int(_mid), _cfg)
     if not _opcoes_an:
         st.info("A análise aparece quando você tiver um cronograma gerado a partir de um edital salvo no app "
-                "(em 🧭 Planejar Estudos → 🚀 Gerar e salvar cronograma). Ela usa o peso de cada matéria na prova.")
+                "(em ⚙️ Gerenciador → 🧭 Planejar concurso novo → 🚀 Gerar e salvar cronograma). Ela usa o peso de cada matéria na prova.")
     else:
-        _esc = st.selectbox("Objetivo:", list(_opcoes_an.keys())) if len(_opcoes_an) > 1 else list(_opcoes_an.keys())[0]
+        _esc = escolher_objetivo(list(_opcoes_an.keys()), "Objetivo:", "obj_analise")
         meta_an, cfg_an = _opcoes_an[_esc]
         TOTAL_Q = int(sum(cfg_an["questoes"].values()))
         N_MAT = len(cfg_an["questoes"])
@@ -4621,7 +4667,7 @@ elif menu == "🧠 Análise e ajuste":
         total_feitas = int(df["feitas"].sum())
 
         st.caption("🏁 Quando há simulados lançados, eles pesam 60% na estimativa de cada matéria (são o melhor termômetro "
-                   "do dia da prova); as questões do dia a dia pesam 40%. Detalhes em 🏁 Meus Simulados.")
+                   "do dia da prova); as questões do dia a dia pesam 40%. Detalhes em 🏁 Simulados.")
         st.caption("Como funciona: o app cruza as questões que você registra (acertos e erros) com o peso de cada matéria "
                    f"na prova ({cfg_an['fonte']}: toda questão vale 1 ponto). Com poucas questões, a estatística engana; "
                    f"por isso o app só diz \"reforçar\" ou \"aliviar\" a partir de {MIN_QUESTOES_CONFIAVEL} questões numa matéria.")
@@ -4638,7 +4684,7 @@ elif menu == "🧠 Análise e ajuste":
                 f"{ritmo['atrasados']} bloco(s) atrasado(s), cerca de {ritmo['minutos_atrasados'] / 60:.1f} h "
                 f"(≈ {dias:.1f} dia(s) de estudo). "
                 + ("Dá para recuperar com um sábado ou estendendo alguns dias." if dias < 3 else
-                   "Use o botão '🔁 Fiquei para trás' em 🗓️ Cronograma Semanal para reorganizar a partir de hoje."))
+                   f"Use {onde_reorganizar(meta_an)} para reorganizar a partir de hoje."))
 
         # ---------------- 2. nota projetada ----------------
         st.subheader("🎯 Nota projetada na prova objetiva")
@@ -4706,7 +4752,7 @@ elif menu == "🧠 Análise e ajuste":
             tooltip=["materia:N", alt.Tooltip("acerto:Q", format=".0f"), "feitas:Q"])
         regras = alt.Chart(pd.DataFrame({"x": [30, 60, 80]})).mark_rule(strokeDash=[4, 3], color="#6b7280").encode(x="x:Q")
         if graf.empty:
-            st.caption("O gráfico aparece quando você registrar questões em 📝 Registrar Questões.")
+            st.caption("O gráfico aparece quando você registrar questões em 📝 Questões.")
         else:
             st.altair_chart((barras + regras).properties(height=max(120, 34 * len(graf))), use_container_width=True)
             st.caption(f"Barras: acerto de cada matéria (com menos de {MIN_QUESTOES_CONFIAVEL} questões, o valor é suavizado "
@@ -4718,7 +4764,7 @@ elif menu == "🧠 Análise e ajuste":
         if foco:
             st.info(f"🎯 Nos blocos de **Revisão / caderno de erros**, o foco sugerido agora é **{foco['materia']}** "
                     f"({foco['pct']:.0%} de acerto em {int(foco['feitas'])} questões; {foco['ganho']:.1f} pontos em jogo). "
-                    "Essa sugestão aparece dentro do bloco em 📅 Meta & Rotina do Dia e muda sozinha conforme você registra questões.")
+                    "Essa sugestão aparece dentro do bloco em 📅 Hoje e muda sozinha conforme você registra questões.")
         else:
             st.info("Registre pelo menos 10 questões em alguma matéria para o app passar a sugerir o foco dos blocos de revisão.")
 
@@ -4747,14 +4793,11 @@ elif menu == "🧠 Análise e ajuste":
                     avisar(f"NÃO foi ajustado. Erro: {e}", "error")
                 st.rerun()
 
-        st.divider()
-        secao_revisao_semana(conn, meta_an, df)
 
 # =============================================================================
 # MENU 5: GERENCIADOR
 # =============================================================================
-elif menu == "⚙️ Gerenciador":
-    st.header("⚙️ Gerenciador do Sistema")
+def _pg_gerenciador():
     
     _abas = ["🩺 Verificar dados", "📅 Cronogramas"] + (["👥 Usuários"] if _usuario() and _usuario()["admin"] else [])
     _tabs = st.tabs(_abas)
@@ -4853,7 +4896,7 @@ elif menu == "⚙️ Gerenciador":
             else:
                 if st.button("🚀 Carregar cronograma", type="primary"):
                     n = carregar_cronograma_cfo(conn)
-                    avisar(f"Cronograma carregado: {n} blocos. Veja em '🗓️ Cronograma Semanal'.", "success")
+                    avisar(f"Cronograma carregado: {n} blocos. Veja em '🗓️ Cronograma'.", "success")
                     st.rerun()
 
         if not _usuario() or _usuario()["admin"]:
@@ -4861,7 +4904,7 @@ elif menu == "⚙️ Gerenciador":
         c = conn.cursor()
         st.subheader("📤 Importar cronograma de outro edital")
         st.write("Envie o edital ao Claude e peça o arquivo **no formato do app**. Ele devolve um **.json**; envie aqui. "
-                 "Se for um arquivo de **edital** (matérias e tópicos), ele vai para '🧭 Planejar Estudos'. "
+                 "Se for um arquivo de **edital** (matérias e tópicos), ele vai para '⚙️ Gerenciador → 🧭 Planejar concurso novo'. "
                  "Se for um **cronograma pronto** (blocos com dia e hora), ele é importado direto.")
         arq_crono = st.file_uploader("Arquivo do cronograma (.json)", type=["json"], key="up_crono")
         eh_edital = False
@@ -4886,7 +4929,7 @@ elif menu == "⚙️ Gerenciador":
                 if st.button("✅ Salvar estas orientações", type="primary"):
                     for m, t, txt in itens_or:
                         salvar_orientacao(conn, m, t, txt)
-                    avisar("Orientações salvas! Elas aparecem embaixo de cada bloco em '📅 Meta & Rotina do Dia'.")
+                    avisar("Orientações salvas! Elas aparecem embaixo de cada bloco em '📅 Hoje'.")
                     st.rerun()
         elif arq_crono is not None and eh_edital:
             edital_lido, erros_ed = ler_arquivo_edital(_bruto)
@@ -4902,7 +4945,7 @@ elif menu == "⚙️ Gerenciador":
                              use_container_width=True, hide_index=True)
                 if st.button("✅ Salvar este edital", type="primary"):
                     salvar_edital(conn, edital_lido)
-                    avisar("Edital salvo! Agora vá em '🧭 Planejar Estudos' para marcar seu conhecimento e gerar o cronograma.")
+                    avisar("Edital salvo! Agora vá em '⚙️ Gerenciador → 🧭 Planejar concurso novo' para marcar seu conhecimento e gerar o cronograma.")
                     st.rerun()
         elif arq_crono is not None:
             dados_crono, erros_crono = ler_arquivo_cronograma(arq_crono.getvalue())
@@ -4940,7 +4983,7 @@ elif menu == "⚙️ Gerenciador":
                 if st.button("✅ Importar este cronograma", type="primary", disabled=not pode_importar):
                     n = carregar_cronograma(conn, dados_crono["objetivo"], dados_crono["inicio"], itens_crono,
                                             dados_crono["tipo"], substituir=existe_obj)
-                    avisar(f"Cronograma importado: {n} blocos. Veja em '🗓️ Cronograma Semanal'.", "success")
+                    avisar(f"Cronograma importado: {n} blocos. Veja em '🗓️ Cronograma'.", "success")
                     st.rerun()
         if not _usuario() or _usuario()["admin"]:
             st.download_button("⬇️ Baixar modelo (cronograma CFO em .json)", data=gerar_json_cronograma_cfo(),
@@ -5000,6 +5043,56 @@ elif menu == "⚙️ Gerenciador":
                     except Exception as e:
                         avisar(f"NÃO foi apagado. Erro: {e}", "error")
                     st.rerun()
+
+def _pg_revisao():
+    """Aba 🤖 Revisão da semana (IA)."""
+    opcoes = {}
+    for _mid, _mnome in conn.execute("SELECT id, nome FROM metas WHERE ativa = 1 ORDER BY id").fetchall():
+        if meta_tem_cronograma(_mid, conn):
+            opcoes[_mnome] = int(_mid)
+    if not opcoes:
+        st.info("A revisão da semana aparece quando você tiver um cronograma carregado.")
+        return
+    mid = opcoes[escolher_objetivo(list(opcoes), "Objetivo:", "obj_revisao")]
+    cfg = config_prova(conn, mid)
+    try:
+        df = analise_desempenho(conn, mid, cfg=cfg) if cfg else None
+    except Exception:
+        df = None
+    secao_revisao_semana(conn, mid, df)
+
+if menu == "📅 Hoje":
+    _pg_hoje()
+elif menu == "🗓️ Cronograma":
+    _pg_cronograma()
+elif menu == "📝 Questões":
+    _pg_questoes()
+elif menu == "🏁 Simulados":
+    st.header("🏁 Simulados")
+    _aba_res, _aba_ped = st.tabs(["📥 Resultados", "🎯 Pedir simulado"])
+    with _aba_res:
+        _pg_sim_resultados()
+    with _aba_ped:
+        _pg_sim_pedir()
+elif menu == "✍️ Redações":
+    _pg_redacoes()
+elif menu == "📊 Desempenho":
+    st.header("📊 Desempenho")
+    _aba_ev, _aba_pr, _aba_rv = st.tabs(["📈 Evolução", "🧠 Prioridades", "🤖 Revisão da semana"])
+    with _aba_ev:
+        _pg_evolucao()
+    with _aba_pr:
+        _pg_analise()
+    with _aba_rv:
+        _pg_revisao()
+elif menu == "⚙️ Gerenciador":
+    st.header("⚙️ Gerenciador")
+    _sec = st.radio("Seção", ["🛠️ Ferramentas e dados", "🧭 Planejar concurso novo"], horizontal=True,
+                    label_visibility="collapsed", key="ger_secao")
+    if _sec.startswith("🧭"):
+        _pg_planejar()
+    else:
+        _pg_gerenciador()
 
 sincronizar_se_mudou()
 conn.close()

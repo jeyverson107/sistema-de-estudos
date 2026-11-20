@@ -2732,9 +2732,47 @@ def proximos_da_materia(conn, topico_id, limite=4):
              AND (t2.semana > t1.semana OR (t2.semana = t1.semana AND (t2.dia > t1.dia OR (t2.dia = t1.dia AND t2.ordem > t1.ordem))))
            ORDER BY t2.semana, t2.dia, t2.ordem LIMIT ?""", (int(topico_id), limite))]
 
+GENERICOS_CRONO = ("Revisão", "Caderno de erros", "Questões AOCP", "questões AOCP", "Redação semanal", "Simulado",
+                   "Só lei seca", "revisão e questões", "questões")
+
+def assuntos_da_materia(conn, topico_id):
+    """NOVO (20/11/2026): todos os assuntos da matéria no cronograma (um por assunto), com data, situação e o começo
+    da orientação (que traz os itens do edital). Serve para a IA saber em que bloco cada assunto está."""
+    m = conn.execute("""SELECT t.materia_id, mt.meta_id, mt.nome FROM topicos t JOIN materias mt ON t.materia_id = mt.id
+                        WHERE t.id = ?""", (int(topico_id),)).fetchone()
+    if not m:
+        return []
+    inicio = datetime.date.fromisoformat(get_config(f"cronograma_inicio_{m[1]}", CRONO_INICIO.isoformat()))
+    grupos = {}
+    for tid, nome, sem, dia, stt in conn.execute(
+            """SELECT id, nome, semana, dia, status FROM topicos WHERE materia_id = ? AND semana IS NOT NULL
+               ORDER BY semana, dia, ordem""", (m[0],)):
+        base = topico_sem_prefixo(nome)
+        for pre in ("Continuação: ", "Lei seca: "):
+            if base.startswith(pre):
+                base = base[len(pre):]
+        if base.startswith(PREFIXO_BASE) or base.startswith(GENERICOS_CRONO):
+            continue
+        g = grupos.setdefault(base, {"data": inicio + datetime.timedelta(days=(sem - 1) * 7 + dia), "status": [],
+                                     "nome": nome, "ids": []})
+        g["status"].append(stt)
+        g["ids"].append(tid)
+    saida = []
+    for base, g in grupos.items():
+        situ = ("concluído" if all(x == "Concluído" for x in g["status"]) else
+                "em andamento" if any(x in ("Concluído", "Parcial") for x in g["status"]) else "ainda não estudado")
+        ori = " ".join((buscar_orientacao(conn, m[2], g["nome"]) or "").split())[:260]
+        saida.append({"assunto": base, "data": g["data"], "situacao": situ, "orientacao": ori,
+                      "este_bloco": int(topico_id) in g["ids"]})
+    return saida
+
 def prompt_analise_bloco(conn, row, orientacao, estudado):
     outros = estudado_na_materia(conn, row['id'])
     proximos = proximos_da_materia(conn, row['id'])
+    mapa = assuntos_da_materia(conn, row['id'])
+    mapa_txt = "\n".join(
+        f"- {'[ESTE BLOCO] ' if a['este_bloco'] else ''}{a['assunto']} — {a['data']:%d/%m} — {a['situacao']}"
+        + (f" — itens: {a['orientacao']}" if a['orientacao'] else "") for a in mapa) or "(sem lista)"
     return f"""Você é um professor experiente em preparação para concursos, especialista na banca Instituto AOCP.
 O aluno se prepara para a prova de Oficial do Corpo de Bombeiros Militar de Pernambuco (CFO CBMPE, prova em 28/02/2027).
 
@@ -2751,17 +2789,27 @@ O que ele registrou ter estudado em outros blocos da mesma matéria:
 
 Próximos blocos desta matéria no cronograma: {'; '.join(proximos) or 'nenhum'}
 
-Responda em português do Brasil, em no máximo 220 palavras, com estes títulos em negrito:
+TODOS OS ASSUNTOS DESTA MATÉRIA NO CRONOGRAMA (vêm do edital; data do bloco, situação e itens):
+{mapa_txt}
+
+Responda em português do Brasil, em no máximo 280 palavras, com estes títulos em negrito:
+**🗂️ Classificação do que você estudou** — para CADA assunto que o aluno escreveu, uma linha com UMA etiqueta:
+  "📘 Edital deste bloco", "📗 Edital de outro bloco: <assunto> (<data>)" ou "🧱 Base fora do edital (ajuda em: <assunto>)".
+  Use a lista acima para decidir; se um assunto não aparece em nenhum item da lista, é base ou não tem relação (diga qual).
 **✅ O que você já cobriu** (do conteúdo previsto do bloco)
 **⏳ O que falta neste bloco**
 **🧩 Base e ordem sugerida** (se o que ele estudou é pré-requisito, diga se foi uma boa escolha e a ordem para seguir)
 **➡️ Próxima sessão** (o que estudar, em quantos minutos, e quantas questões fazer)
-**📌 Status sugerido:** Concluído ou Parcial, com uma frase de justificativa.
+**📌 Botão sugerido:** escolha UM e justifique em uma frase:
+  "✅ Concluí" (estudou os itens do edital deste bloco), "⏳ Fiz parte" (estudou só parte deles),
+  "🧱 Estudei a base" (gastou o tempo com base fora do edital e os itens deste bloco ficaram para depois) ou
+  "📆 Hoje não" (ainda não estudou nada deste bloco). Se estudou assunto de OUTRO bloco do edital, diga que esse
+  outro bloco pode ficar mais leve quando chegar a data dele.
 
 Regras: não invente conteúdo de edital nem números da prova; baseie-se só no conteúdo previsto e na orientação acima.
 Registros marcados como [base, fora do edital] são estudo de PRÉ-REQUISITO escolhido pelo aluno (ex.: bases moleculares
 antes de citologia): trate como base legítima, diga se de fato ajuda o conteúdo do edital e NÃO os conte como conteúdo
-do bloco coberto. Só sugira "Concluído" se os itens do conteúdo previsto foram estudados. Se algo estudado não tiver
+do bloco coberto. Só sugira "✅ Concluí" se os itens do conteúdo previsto foram estudados. Se algo estudado não tiver
 relação com o conteúdo do bloco, diga com franqueza. Seja direto, sem elogios vazios.
 LIVROS E MATERIAIS: se o aluno citar um livro, apostila, aula ou PDF só pelo nome, número de capítulo, página ou aula,
 SEM dizer quais assuntos estudou, NÃO suponha o conteúdo (capítulos mudam de edição para edição). Nesse caso, comece a
@@ -3034,6 +3082,8 @@ def cartao_bloco(conn, row, meta_id, mostrar_data=False, expandido=None):
                                         placeholder="Ex.: Amabis & Martho, vol. 1, cap. 3 – A química da vida: água, sais "
                                                     "minerais, glicídios, lipídios, proteínas. (Se citar livro ou aula, "
                                                     "escreva também os assuntos do sumário.)")
+                st.caption("Escreva do seu jeito. Em 🤖 Analisar, a IA classifica cada assunto (📘 edital deste bloco, "
+                           "📗 edital de outro bloco ou 🧱 base fora do edital) e diz qual botão faz sentido tocar.")
                 e1, e2 = st.columns(2)
                 with e1:
                     if st.button("💾 Salvar o que estudei", key=f"est_salvar_{topico_id}"):

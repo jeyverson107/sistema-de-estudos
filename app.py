@@ -338,6 +338,9 @@ def init_db():
     if "origem" not in colunas_orient:
         c.execute("ALTER TABLE orientacoes ADD COLUMN origem TEXT DEFAULT 'usuario'")
     # NOVO (11/11/2026): baterias com vários tópicos (lote = mesma bateria; assuntos = lista quando só se sabe o total)
+    # NOVO (20/11/2026): sessões de tempo ligadas a um registro de questões (para apagar junto)
+    if "ref" not in [col[1] for col in c.execute("PRAGMA table_info(sessoes)").fetchall()]:
+        c.execute("ALTER TABLE sessoes ADD COLUMN ref TEXT")
     colunas_ex = [col[1] for col in c.execute("PRAGMA table_info(exercicios)").fetchall()]
     for nome_col in ("lote", "bateria", "assuntos"):
         if nome_col not in colunas_ex:
@@ -1240,7 +1243,7 @@ def dados_simulados(conn, meta_id):
     return sims, itens
 
 
-def registrar_bateria_mista(conn, df_top, materia_nome):
+def registrar_bateria_mista(conn, df_top, materia_nome, meta_id=None, min_cron=0):
     ver = st.session_state.get("mx_ver", 0)
     # um item por ASSUNTO (junta "Continuação:" e "Lei seca:" do mesmo assunto; grava no 1º bloco dele)
     ids = {}
@@ -1263,6 +1266,8 @@ def registrar_bateria_mista(conn, df_top, materia_nome):
         c1, c2 = st.columns(2)
         q = c1.number_input("Questões feitas (total)", min_value=0, max_value=1000, step=1, key=f"mx_q_{ver}")
         e = c2.number_input("Erros (total)", min_value=0, max_value=1000, step=1, key=f"mx_e_{ver}")
+        min_q = st.number_input("⏱️ Minutos resolvendo (entra no seu tempo de estudo de hoje)", min_value=0,
+                                max_value=600, value=int(min_cron), step=5, key=f"mx_min_{ver}")
         if e > q:
             erro_txt = "Há mais erros do que questões."
         if q > 0:
@@ -1291,8 +1296,11 @@ def registrar_bateria_mista(conn, df_top, materia_nome):
                     if conf[0] == len(linhas):
                         tot = conf[1] + conf[2]
                         st.session_state["mx_ver"] = ver + 1  # limpa o formulário
+                        m_ok = (gravar_tempo_questoes(conn, meta_id, linhas[0][0], min_q, f"lote:{lote}")
+                                if meta_id is not None else 0)
                         avisar(f"Bateria salva e conferida: {conf[1]} acertos e {conf[2]} erros "
-                               f"({round(100 * conf[1] / tot)}%) em {len(escolhidos)} tópico(s).")
+                               f"({round(100 * conf[1] / tot)}%) em {len(escolhidos)} tópico(s)"
+                               + (f" · ⏱️ {m_ok} min somados ao seu estudo de hoje." if m_ok else "."))
                     else:
                         avisar("O app não encontrou todos os registros ao conferir. Tente de novo.", "error")
                 except Exception as ex:
@@ -1326,6 +1334,7 @@ def registrar_bateria_mista(conn, df_top, materia_nome):
                st.button("🗑️ Apagar bateria", key=f"mx_del_{lote}"):
                 try:
                     conn.execute("DELETE FROM exercicios WHERE lote = ?", (lote,))
+                    conn.execute("DELETE FROM sessoes WHERE ref = ?", (f"lote:{lote}",))
                     conn.commit()
                     avisar("Bateria apagada.")
                 except Exception as ex:
@@ -2606,6 +2615,60 @@ if (rodando) {{
 </script>""", height=130)
 
 
+# -----------------------------------------------------------------------------
+# NOVO (20/11/2026): TEMPO RESOLVENDO QUESTÕES FORA DOS BLOCOS
+# Cronômetro próprio da tela 📝 Questões (o início fica salvo no banco: não para se a tela apagar)
+# e o tempo vira uma sessão de estudo (entra no total do dia, da semana e no desempenho).
+# -----------------------------------------------------------------------------
+def _relogio_crescente(seg_passados, rodando):
+    import streamlit.components.v1 as components
+    components.html(f"""
+<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#31333F;font-size:28px;font-weight:700">⏱️
+  <code id="t" style="font-size:28px;background:#f0f2f6;padding:2px 8px;border-radius:6px"></code>
+  <div id="st" style="font-size:13px;font-weight:400;color:#666;margin-top:4px"></div></div>
+<script>
+const ini = Date.now() - ({int(seg_passados)} * 1000);
+const p = n => String(n).padStart(2, "0");
+function d() {{ const s = Math.max(0, Math.floor((Date.now() - ini) / 1000));
+  document.getElementById("t").textContent = p(Math.floor(s/3600)) + ":" + p(Math.floor(s%3600/60)) + ":" + p(s%60);
+  document.getElementById("st").textContent = "Contando: pode apagar a tela ou sair da página, o tempo continua."; }}
+d(); setInterval(d, 1000); document.addEventListener("visibilitychange", d);
+</script>""", height=80)
+
+def cronometro_questoes(meta_id):
+    """Mostra o cronômetro das questões e devolve os minutos contados (0 se parado)."""
+    chave = f"cron_questoes_{meta_id}"
+    ini_txt = get_config(chave, "")
+    agora = datetime.datetime.now(ZoneInfo("America/Recife")).replace(tzinfo=None)
+    minutos = 0
+    with st.container(border=True):
+        st.markdown("**⏱️ Tempo resolvendo questões**")
+        if ini_txt:
+            ini = datetime.datetime.fromisoformat(ini_txt)
+            seg = max(0, int((agora - ini).total_seconds()))
+            minutos = round(seg / 60)
+            _relogio_crescente(seg, True)
+            st.caption(f"Começou às {ini:%H:%M}. Ao salvar o resultado abaixo, o tempo entra junto e o cronômetro zera.")
+            if st.button("⏹️ Zerar sem salvar", key="cronq_zerar"):
+                set_config(chave, "")
+                st.rerun()
+        else:
+            st.caption("Toque em ▶️ antes de começar as questões. Se esquecer, é só digitar os minutos na hora de salvar.")
+            if st.button("▶️ Começar a contar", key="cronq_ini", type="primary"):
+                set_config(chave, agora.isoformat(timespec="seconds"))
+                st.rerun()
+    return minutos
+
+def gravar_tempo_questoes(conn, meta_id, topico_id, minutos, ref):
+    """Grava o tempo como sessão de estudo de hoje e zera o cronômetro das questões."""
+    minutos = int(minutos or 0)
+    if minutos > 0:
+        conn.execute("INSERT INTO sessoes (data, topico_id, minutos, origem, ref) VALUES (?, ?, ?, 'questoes', ?)",
+                     (hoje_local().isoformat(), int(topico_id), minutos, ref))
+        conn.commit()
+    set_config(f"cron_questoes_{meta_id}", "")
+    return minutos
+
 def botao_copiar(texto, chave, rotulo="📋 Copiar pedido"):
     """NOVO (11/11/2026): botão grande de copiar, que funciona no celular (toque).
     Tenta a área de transferência moderna e, se o navegador bloquear, usa o método antigo."""
@@ -3218,6 +3281,13 @@ def painel_escala_hoje(conn, meta_id, cfg):
     alertas.sort(key=lambda x: x[0])
     with st.container(border=True):
         st.markdown(f"**Hoje: {TIPOS_DIA[tipo]}.** {textos[tipo]}")
+        _hj = conn.execute("""SELECT COALESCE(SUM(s.minutos), 0), COALESCE(SUM(CASE WHEN s.origem = 'questoes'
+                                     THEN s.minutos ELSE 0 END), 0)
+                              FROM sessoes s JOIN topicos t ON s.topico_id = t.id JOIN materias m ON t.materia_id = m.id
+                              WHERE m.meta_id = ? AND s.data = ?""", (int(meta_id), hoje.isoformat())).fetchone()
+        if _hj[0]:
+            st.caption(f"⏱️ Estudado hoje: **{_fmt_h(int(_hj[0]))}**" + (f" de {_fmt_h(meta)}" if meta else "")
+                       + (f" (inclui {_fmt_h(int(_hj[1]))} de questões fora dos blocos)" if _hj[1] else ""))
         for _, txt_al in alertas[:3]:
             st.markdown(txt_al)
         if len(alertas) > 3:
@@ -4159,6 +4229,7 @@ def _pg_questoes():
         meta_id = df_metas[df_metas['nome'] == meta_sel]['id'].values[0]
 
         st.caption("Resultado de simulado não entra aqui: lance em 🏁 Simulados, que acompanha os simulados à parte.")
+        min_cron = cronometro_questoes(int(meta_id))
 
         df_mat = pd.read_sql_query("SELECT id, nome FROM materias WHERE meta_id = ?", conn, params=(int(meta_id),))
         
@@ -4176,7 +4247,7 @@ def _pg_questoes():
             if df_top.empty:
                 st.warning("Nenhum tópico cadastrado nesta matéria.")
             elif modo_reg.startswith("Vários"):
-                registrar_bateria_mista(conn, df_top, mat_sel)
+                registrar_bateria_mista(conn, df_top, mat_sel, int(meta_id), min_cron)
             else:
                 topico_sel = st.selectbox("Selecione o Tópico", df_top['nome'].tolist())
                 topico_id = df_top[df_top['nome'] == topico_sel]['id'].values[0]
@@ -4185,6 +4256,8 @@ def _pg_questoes():
                     col_a, col_b = st.columns(2)
                     with col_a: acertos = st.number_input("Número de Acertos", min_value=0, value=0, step=1)
                     with col_b: erros = st.number_input("Número de Erros", min_value=0, value=0, step=1)
+                    min_q = st.number_input("⏱️ Minutos resolvendo (entra no seu tempo de estudo de hoje)",
+                                            min_value=0, max_value=600, value=int(min_cron), step=5)
 
                     if st.form_submit_button("💾 Salvar Desempenho"):
                         if acertos + erros == 0:
@@ -4199,8 +4272,10 @@ def _pg_questoes():
                                 conf = conn.execute("SELECT acertos, erros FROM exercicios WHERE id = ?", (novo_id,)).fetchone()
                                 if conf and conf[0] == int(acertos) and conf[1] == int(erros):
                                     total = conf[0] + conf[1]
+                                    m_ok = gravar_tempo_questoes(conn, int(meta_id), int(topico_id), min_q, f"ex:{novo_id}")
                                     avisar(f"Salvo e conferido no banco: {conf[0]} acertos e {conf[1]} erros "
-                                           f"({round(100 * conf[0] / total)}% de acerto) em \"{topico_sel.split(' · ', 1)[-1]}\".")
+                                           f"({round(100 * conf[0] / total)}% de acerto) em \"{topico_sel.split(' · ', 1)[-1]}\""
+                                           + (f" · ⏱️ {m_ok} min somados ao seu estudo de hoje." if m_ok else "."))
                                 else:
                                     avisar("O app tentou salvar, mas não encontrou o registro ao conferir o banco. Tente de novo.", "error")
                             except Exception as e:
@@ -4229,6 +4304,7 @@ def _pg_questoes():
                         if st.button("Apagar este registro", key="ex_apagar_btn"):
                             try:
                                 conn.execute("DELETE FROM exercicios WHERE id = ?", (opcoes[escolha],))
+                                conn.execute("DELETE FROM sessoes WHERE ref = ?", (f"ex:{opcoes[escolha]}",))
                                 conn.commit()
                                 ainda = conn.execute("SELECT 1 FROM exercicios WHERE id = ?", (opcoes[escolha],)).fetchone()
                                 avisar("Registro apagado." if not ainda else "O registro NÃO foi apagado. Tente de novo.",

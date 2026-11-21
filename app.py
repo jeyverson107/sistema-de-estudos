@@ -6,6 +6,7 @@ import time
 import math
 import os
 from zoneinfo import ZoneInfo
+import edital_cfo  # NOVO (21/11/2026): itens do edital e avanço por matéria
 
 st.set_page_config(page_title="Sistema de Estudos & Carreira", layout="wide", page_icon=os.path.join(os.path.dirname(os.path.abspath(__file__)), "icone.png"))
 
@@ -545,7 +546,7 @@ _LEG = ["Estatuto (Lei 6.783): hierarquia e disciplina", "Estatuto: cargo e fun�
         "Lei 14.751/2023: princípios, competências, quadros", "Lei 14.751/2023: direitos, garantias, ingresso",
         "2ª passada: Estatuto + Cód. Disciplinar em questões", "2ª passada: Decreto, Lei 15.187 e Lei 14.751 em questões"]
 # Constitucional: (terça, sexta) nas semanas ímpares; só terça nas pares
-_CF = [("Constituição: conceito e classificação", "Poder constituinte"), ("Eficácia das normas; princípios fundamentais",),
+_CF = [("Constituição: conceito e classificação", "Poder constituinte"), ("Eficácia e aplicabilidade das normas constitucionais",),
        ("Direitos individuais (art. 5º) – parte 1", "Art. 5º – parte 2 e remédios constitucionais"), ("Direitos sociais e nacionalidade",),
        ("Direitos políticos e partidos", "Organização do Estado: federação e União"), ("Estados, Municípios e repartição de competências",),
        ("Administração Pública (arts. 37 a 41)", "Militares dos Estados (art. 42)"), ("Poder Legislativo",),
@@ -1967,6 +1968,29 @@ def ajuste_titulos_2026_10_22(conn):
     if n:
         avisar(f"Cronograma atualizado: {n} blocos de exatas, Informática e Espanhol ganharam títulos mais completos.", "info")
 
+def ajuste_titulos_2026_11_21(conn):
+    """NOVO (21/11/2026): títulos ajustados ao edital do 2º Tenente (os arts. 1º a 4º da CF não são cobrados).
+    Só troca o nome; o progresso do bloco é mantido."""
+    chave = "ajuste_titulos_2026_11_21"
+    est = nuvem_estado()
+    if get_config(chave, "") or (est["ativa"] and est["status"] != "ok"):
+        return
+    n = 0
+    for materia, antigo, novo in edital_cfo.RENOMEAR_2026_11_21:
+        linhas = conn.execute("""SELECT t.id, t.nome FROM topicos t JOIN materias m ON t.materia_id = m.id
+                                 WHERE m.nome = ?""", (materia,)).fetchall()
+        for tid, nome in linhas:
+            if antigo in nome:
+                conn.execute("UPDATE topicos SET nome = ? WHERE id = ?", (nome.replace(antigo, novo), tid))
+                n += 1
+        conn.execute("DELETE FROM orientacoes WHERE materia = ? AND topico LIKE ? AND origem = 'padrao'",
+                     (materia, f"%{antigo}"))
+    conn.commit()
+    set_config(chave, f"feito ({n} blocos)")
+    if n:
+        avisar(f"Cronograma ajustado ao edital: {n} bloco(s) de Constitucional mudaram de título "
+               "(os princípios fundamentais, arts. 1º a 4º, não são cobrados para 2º Tenente).", "info")
+
 def recomeco_automatico_20_10(conn):
     """Pedido em 20/10/2026: recomeçar o cronograma CFO a partir de 20/10. Roda uma vez só."""
     chave = "recomeco_2026_10_20"
@@ -2924,6 +2948,9 @@ def cartao_bloco(conn, row, meta_id, mostrar_data=False, expandido=None):
     with st.expander(titulo, expanded=(not concluido) if expandido is None else expandido):
         # ---------------- 1. o que estudar ----------------
         st.markdown(f"**Conteúdo:** {row['nome'].split(' · ', 1)[-1]}")
+        _itens_ed = edital_cfo.itens_do_bloco(row['materia'], row['nome'])  # NOVO (21/11/2026)
+        if _itens_ed:
+            st.caption("📘 **Itens do edital que este bloco cobre:** " + " · ".join(_itens_ed))
         anot = row.get('anotacao') if hasattr(row, 'get') else None
         anot = anot.strip() if isinstance(anot, str) else ""
         if anot and not concluido:
@@ -3589,6 +3616,7 @@ ajuste_estatuto_14_10(conn)
 recomeco_automatico_20_10(conn)
 ajuste_titulos_2026_10_22(conn)
 ajuste_progresso_2026_11_01(conn)
+ajuste_titulos_2026_11_21(conn)
 for (_mid_esc,) in conn.execute("SELECT id FROM metas WHERE ativa = 1").fetchall():
     reorganizar_automatico(conn, _mid_esc)
 mostrar_avisos()  # mostra já os avisos dos ajustes automáticos acima
@@ -5187,6 +5215,76 @@ def _pg_revisao():
         df = None
     secao_revisao_semana(conn, mid, df)
 
+def _pg_avanco_edital():
+    """NOVO (21/11/2026): aba 📖 Avanço no edital. Quanto do conteúdo programático (Anexo II do edital
+    CBMPE 002/2026, 2º Tenente) já foi estudado, por matéria e no total. Não altera nenhuma outra análise."""
+    r = conn.execute("SELECT id FROM metas WHERE nome = ?", (CRONO_META_NOME,)).fetchone()
+    if not r:
+        st.info(f"O avanço no edital aparece quando o cronograma '{CRONO_META_NOME}' estiver carregado.")
+        return
+    mid = int(r[0])
+    hoje = hoje_local()
+    inicio = datetime.date.fromisoformat(get_config(f"cronograma_inicio_{mid}", CRONO_INICIO.isoformat()))
+    idx_hoje = (hoje - inicio).days
+    blocos = [{"materia": m, "nome": n, "status": stt,
+               "idx": ((sem - 1) * 7 + dia) if sem is not None and dia is not None else None}
+              for m, n, stt, sem, dia in conn.execute(
+                  """SELECT m.nome, t.nome, t.status, t.semana, t.dia FROM topicos t
+                     JOIN materias m ON t.materia_id = m.id WHERE m.meta_id = ?""", (mid,)).fetchall()]
+    linhas = edital_cfo.calcular_avanco(blocos, idx_hoje)
+    resumo = edital_cfo.resumo_por_materia(linhas)
+    av_p, es_p = edital_cfo.avanco_global(resumo, ponderado=True)
+    av_s, _ = edital_cfo.avanco_global(resumo, ponderado=False)
+    completos = sum(1 for l in linhas if l["avanco"] >= 0.999)
+
+    st.subheader("📖 Avanço no edital")
+    st.caption("Base: conteúdo programático do edital CBMPE nº 002/2026 (Anexo II, 2º Tenente QOC), "
+               f"dividido em {len(linhas)} itens. Cada item vale a média dos blocos de conteúdo que o cobrem: "
+               "✅ Concluí = 100% · ⏳ Fiz parte = 50% · ainda não estudado = 0%. "
+               "Blocos de lei seca, revisão, questões, redação e simulado não contam.")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Edital estudado (peso na prova)", f"{av_p:.0%}",
+              (f"{(av_p - es_p) * 100:+.0f} pontos vs o cronograma ({es_p:.0%} até hoje)" if es_p is not None else None),
+              delta_color="normal", border=True,
+              help="Média das matérias ponderada pelo número de questões de cada uma na prova (Tabela 10.2).")
+    c2.metric("Média simples das matérias", f"{av_s:.0%}", border=True,
+              help="Todas as matérias com o mesmo peso.")
+    c3.metric("Itens do edital completos", f"{completos} de {len(linhas)}", border=True)
+    st.progress(min(1.0, av_p), text=f"Avanço global ponderado: {av_p:.1%}")
+    _dias_prova = (datetime.date(2027, 2, 28) - hoje).days
+    if _dias_prova > 0 and av_p < 1:
+        st.caption(f"Faltam {1 - av_p:.0%} do edital e {_dias_prova} dias até a prova (28/02/2027): "
+                   f"para fechar tudo, avance em média {(1 - av_p) / (_dias_prova / 7):.1%} do edital por semana.")
+
+    tab = []
+    for m, (av, es, n_it, n_ok) in resumo.items():
+        tab.append({"Matéria": m, "Avanço": round(av * 100), "Previsto até hoje": round(es * 100) if es is not None else None,
+                    "Diferença": (round((av - es) * 100) if es is not None else None),
+                    "Itens completos": f"{n_ok} de {n_it}", "Questões na prova": edital_cfo.QUESTOES_PROVA[m]})
+    df_tab = pd.DataFrame(tab).sort_values(["Diferença", "Questões na prova"], ascending=[True, False])
+    st.dataframe(df_tab, hide_index=True, width="stretch", column_config={
+        "Avanço": st.column_config.ProgressColumn("Avanço (%)", min_value=0, max_value=100, format="%d%%"),
+        "Previsto até hoje": st.column_config.ProgressColumn("Previsto até hoje (%)", min_value=0, max_value=100, format="%d%%"),
+        "Diferença": st.column_config.NumberColumn("Diferença (pontos)", format="%+d",
+                                                   help="Negativo = atrás do cronograma nesta matéria.")})
+    st.caption("Previsto até hoje = quanto da matéria já estaria estudado se você tivesse feito todos os blocos "
+               "marcados no cronograma até ontem. Quando o app reorganiza o cronograma, o previsto acompanha. "
+               "As matérias mais atrasadas aparecem primeiro.")
+
+    st.markdown("**Itens do edital por matéria** (toque para abrir)")
+    for m in df_tab["Matéria"]:
+        av, es, n_it, n_ok = resumo[m]
+        with st.expander(f"{m}: {av:.0%} · {n_ok} de {n_it} itens completos"):
+            for l in [x for x in linhas if x["materia"] == m]:
+                icone = "✅" if l["avanco"] >= 0.999 else ("⏳" if l["avanco"] > 0 else "⬜")
+                st.markdown(f"{icone} **{l['item']}** · {l['avanco']:.0%}")
+                if not l["blocos"]:
+                    st.caption("⚠️ Nenhum bloco do cronograma cobre este item.")
+                else:
+                    st.caption(" · ".join(f"{'✅' if stt == 'Concluído' else ('⏳' if stt == 'Parcial' else '⬜')} "
+                                          f"{nome.split(' · ', 1)[-1]}" + (f" ({nome[:13]})" if ' · ' in nome else "")
+                                          for nome, stt in l["blocos"]))
+
 if menu == "📅 Hoje":
     _pg_hoje()
 elif menu == "🗓️ Cronograma":
@@ -5204,9 +5302,11 @@ elif menu == "✍️ Redações":
     _pg_redacoes()
 elif menu == "📊 Desempenho":
     st.header("📊 Desempenho")
-    _aba_ev, _aba_pr, _aba_rv = st.tabs(["📈 Evolução", "🧠 Prioridades", "🤖 Revisão da semana"])
+    _aba_ev, _aba_ed, _aba_pr, _aba_rv = st.tabs(["📈 Evolução", "📖 Avanço no edital", "🧠 Prioridades", "🤖 Revisão da semana"])
     with _aba_ev:
         _pg_evolucao()
+    with _aba_ed:
+        _pg_avanco_edital()
     with _aba_pr:
         _pg_analise()
     with _aba_rv:

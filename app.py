@@ -7,6 +7,10 @@ import math
 import os
 from zoneinfo import ZoneInfo
 import edital_cfo  # NOVO (21/11/2026): itens do edital e avanço por matéria
+import importlib
+# NOVO (24/11/2026): o servidor guarda o módulo antigo na memória quando o app é atualizado;
+# recarregar garante que o edital_cfo.py novo seja usado junto com o app.py novo.
+edital_cfo = importlib.reload(edital_cfo)
 
 st.set_page_config(page_title="Sistema de Estudos & Carreira", layout="wide", page_icon=os.path.join(os.path.dirname(os.path.abspath(__file__)), "icone.png"))
 
@@ -2062,7 +2066,11 @@ def ajuste_quimica_2026_11_24(conn):
     if get_config(chave, "") or (est["ativa"] and est["status"] != "ok"):
         return
     n = 0
-    for materia, antigo, novo in edital_cfo.RENOMEAR_2026_11_24:
+    renomear = getattr(edital_cfo, "RENOMEAR_2026_11_24", [
+        ("Química", "fogo e combustão", "fogo, combustão, petróleo e combustíveis"),
+        ("Química", "radioatividade, orgânica e química aplicada", "orgânica I: carbono, cadeias, funções e nomenclatura"),
+        ("Química", "questões AOCP", "orgânica II: isomeria, acidez, reações, polímeros e radioatividade")])
+    for materia, antigo, novo in renomear:
         linhas = conn.execute("""SELECT t.id, t.nome FROM topicos t JOIN materias m ON t.materia_id = m.id
                                  WHERE m.nome = ?""", (materia,)).fetchall()
         for tid, nome in linhas:
@@ -3704,7 +3712,10 @@ recomeco_automatico_20_10(conn)
 ajuste_titulos_2026_10_22(conn)
 ajuste_progresso_2026_11_01(conn)
 ajuste_titulos_2026_11_21(conn)
-ajuste_quimica_2026_11_24(conn)
+try:
+    ajuste_quimica_2026_11_24(conn)
+except Exception as _e_qui:
+    avisar(f"Não foi possível reorganizar os blocos de Química agora ({_e_qui}). O app segue funcionando.", "warning")
 for (_mid_esc,) in conn.execute("SELECT id FROM metas WHERE ativa = 1").fetchall():
     reorganizar_automatico(conn, _mid_esc)
 mostrar_avisos()  # mostra já os avisos dos ajustes automáticos acima

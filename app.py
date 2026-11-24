@@ -1371,12 +1371,74 @@ def conferir_status(conn, topico_id):
     r = conn.execute("SELECT nome, status, COALESCE(minutos_estudados, 0) FROM topicos WHERE id = ?", (int(topico_id),)).fetchone()
     return r
 
+# -----------------------------------------------------------------------------
+# NOVO (24/11/2026): avanço no edital calculado em um só lugar
+# (usado na aba 📖 Avanço no edital, na barra da tela Hoje e no aviso ao concluir um bloco)
+# -----------------------------------------------------------------------------
+def _pct1(x):
+    """Percentual com uma casa decimal e vírgula (padrão brasileiro)."""
+    return f"{x:.1%}".replace(".", ",")
+
+def avanco_edital_meta(conn, meta_id):
+    """Retorna (linhas, resumo, avanço global ponderado, previsto até hoje) da meta do CFO."""
+    hoje = hoje_local()
+    inicio = datetime.date.fromisoformat(get_config(f"cronograma_inicio_{meta_id}", CRONO_INICIO.isoformat()))
+    idx_hoje = (hoje - inicio).days
+    blocos = [{"materia": m, "nome": n, "status": stt,
+               "idx": ((sem - 1) * 7 + dia) if sem is not None and dia is not None else None}
+              for m, n, stt, sem, dia in conn.execute(
+                  """SELECT m.nome, t.nome, t.status, t.semana, t.dia FROM topicos t
+                     JOIN materias m ON t.materia_id = m.id WHERE m.meta_id = ?""", (int(meta_id),)).fetchall()]
+    linhas = edital_cfo.calcular_avanco(blocos, idx_hoje)
+    resumo = edital_cfo.resumo_por_materia(linhas)
+    av_p, es_p = edital_cfo.avanco_global(resumo, ponderado=True)
+    return linhas, resumo, av_p, es_p
+
+def _meta_cfo_do_topico(conn, topico_id):
+    """(meta_id, matéria, nome do bloco) se o bloco é do cronograma do CFO; senão None."""
+    r = conn.execute("""SELECT mt.id, m.nome, t.nome FROM topicos t JOIN materias m ON t.materia_id = m.id
+                        JOIN metas mt ON m.meta_id = mt.id WHERE t.id = ? AND mt.nome = ?""",
+                     (int(topico_id), CRONO_META_NOME)).fetchone()
+    return r
+
+def aviso_avanco_edital(conn, topico_id, antes):
+    """Compara o avanço antes e depois de mudar o status do bloco e avisa a diferença."""
+    try:
+        info = _meta_cfo_do_topico(conn, topico_id)
+        if not info or antes is None:
+            return
+        mid, materia, nome = info
+        if not edital_cfo.itens_do_bloco(materia, nome):
+            return  # bloco de revisão, questões, lei seca etc.: não muda o avanço
+        _, resumo_d, av_d, _ = avanco_edital_meta(conn, mid)
+        resumo_a, av_a = antes
+        m_a = resumo_a.get(materia, (0,))[0]
+        m_d = resumo_d.get(materia, (0,))[0]
+        if abs(av_d - av_a) < 1e-9 and abs(m_d - m_a) < 1e-9:
+            return
+        st.session_state.setdefault("_avisos", []).append(
+            ("info", f"📖 Avanço no edital: {materia} {m_a:.0%} → {m_d:.0%} · Geral {_pct1(av_a)} → {_pct1(av_d)}"))
+    except Exception:
+        pass
+
+def _foto_avanco(conn, topico_id):
+    try:
+        info = _meta_cfo_do_topico(conn, topico_id)
+        if not info:
+            return None
+        _, resumo, av, _ = avanco_edital_meta(conn, info[0])
+        return resumo, av
+    except Exception:
+        return None
+
 def salvar_status_com_aviso(conn, topico_id, status, minutos=None):
+    antes = _foto_avanco(conn, topico_id)
     try:
         salvar_status_topico(conn, topico_id, status, minutos)
         r = conferir_status(conn, topico_id)
         if r and r[1] == status:
             avisar(f"Salvo e conferido: \"{r[0].split(' · ', 1)[-1]}\" está como {r[1]}, com {r[2]} min registrados.")
+            aviso_avanco_edital(conn, topico_id, antes)
         else:
             avisar("O app tentou salvar, mas ao conferir o banco o status não mudou. Tente de novo e, se repetir, me avise.", "error")
     except Exception as e:
@@ -3662,6 +3724,21 @@ def _pg_hoje():
         meta_sel_rotina = escolher_objetivo(df_metas['nome'].tolist(), "Objetivo:", "obj_hoje")
         meta_id_rotina = df_metas[df_metas['nome'] == meta_sel_rotina]['id'].values[0]
 
+        # NOVO (24/11/2026): barra do avanço no edital, sempre visível na tela Hoje
+        if meta_sel_rotina == CRONO_META_NOME:
+            try:
+                _l_ed, _r_ed, _av_ed, _es_ed = avanco_edital_meta(conn, int(meta_id_rotina))
+                _txt_ed = f"📖 Edital estudado: {_pct1(_av_ed)}"
+                if _es_ed is not None:
+                    _dif = (_av_ed - _es_ed) * 100
+                    _txt_ed += f" · previsto até hoje: {_es_ed:.0%} ({_dif:+.0f} pontos)"
+                st.progress(min(1.0, _av_ed), text=_txt_ed)
+                st.caption("Por matéria: " + " · ".join(f"{m.replace('Legislação dos Militares de PE', 'Legislação')} {v[0]:.0%}"
+                                                        for m, v in _r_ed.items())
+                           + ". Detalhes em 📊 Desempenho → 📖 Avanço no edital.")
+            except Exception:
+                pass
+
         # NOVO: se o objetivo tem cronograma, mostra os blocos de hoje
         if meta_tem_cronograma(meta_id_rotina, conn):
             semana_hoje, dia_hoje = semana_e_dia_de_hoje(meta_id_rotina)
@@ -5250,16 +5327,7 @@ def _pg_avanco_edital():
         return
     mid = int(r[0])
     hoje = hoje_local()
-    inicio = datetime.date.fromisoformat(get_config(f"cronograma_inicio_{mid}", CRONO_INICIO.isoformat()))
-    idx_hoje = (hoje - inicio).days
-    blocos = [{"materia": m, "nome": n, "status": stt,
-               "idx": ((sem - 1) * 7 + dia) if sem is not None and dia is not None else None}
-              for m, n, stt, sem, dia in conn.execute(
-                  """SELECT m.nome, t.nome, t.status, t.semana, t.dia FROM topicos t
-                     JOIN materias m ON t.materia_id = m.id WHERE m.meta_id = ?""", (mid,)).fetchall()]
-    linhas = edital_cfo.calcular_avanco(blocos, idx_hoje)
-    resumo = edital_cfo.resumo_por_materia(linhas)
-    av_p, es_p = edital_cfo.avanco_global(resumo, ponderado=True)
+    linhas, resumo, av_p, es_p = avanco_edital_meta(conn, mid)
     av_s, _ = edital_cfo.avanco_global(resumo, ponderado=False)
     completos = sum(1 for l in linhas if l["avanco"] >= 0.999)
 

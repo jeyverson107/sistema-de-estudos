@@ -568,7 +568,7 @@ _DPM = [("Aplicação da lei penal militar",), ("Crime militar: art. 9º do CPM 
         ("Crimes contra a autoridade e a disciplina",), ("Crimes contra o serviço e o dever militar", "Demais crimes contra o serviço militar"),
         ("Crimes contra a administração militar",), ("Crimes contra a pessoa e o patrimônio", "Crimes em tempo de guerra (visão geral)"),
         ("Súmulas do STF, STJ e STM",), ("Questões AOCP", "Questões AOCP e revisão")]
-_ROT = [("Est: conceitos e apresentação de dados", "Mat: conjuntos numéricos, razão, proporção e porcentagem", "Quím: fogo e combustão"),
+_ROT = [("Est: conceitos e apresentação de dados", "Mat: conjuntos numéricos, razão, proporção e porcentagem", "Quím: fogo, combustão, petróleo e combustíveis"),
         ("Est: média, moda, mediana", "Fís: grandezas, vetores e cinemática (MU e MUV)", "Bio: citologia e metabolismo"),
         ("Est: variância, desvio, CV, boxplot", "Info: segurança da informação", "Quím: misturas, átomo e tabela periódica"),
         ("Mat: juros, PA e PG", "Fís: dinâmica (Leis de Newton), quantidade de movimento e equilíbrio", "Bio: ecologia"),
@@ -580,9 +580,9 @@ _ROT = [("Est: conceitos e apresentação de dados", "Mat: conjuntos numéricos,
         ("Mat: contagem e probabilidade", "Fís: termologia e gases", "Bio: evolução, classificação, embriologia e fisiologia humana"),
         ("Est: regressão linear", "Info: Excel e Calc", "Quím: termoquímica, cinética, equilíbrio e pH"),
         ("Fís: eletrostática, eletrodinâmica e magnetismo", "Inglês/Espanhol: Espanhol: verbos, advérbios, preposições e conjunções", "Bio: biomas e problemas ambientais"),
-        ("Est: questões AOCP", "Info: internet, nuvem e editores (Word/Writer e PowerPoint/Impress)", "Quím: radioatividade, orgânica e química aplicada"),
+        ("Est: questões AOCP", "Info: internet, nuvem e editores (Word/Writer e PowerPoint/Impress)", "Quím: orgânica I: carbono, cadeias, funções e nomenclatura"),
         ("Mat: trigonometria, geometria analítica e sistemas", "Fís: óptica e ondas", "Bio: questões AOCP"),
-        ("Est: revisão e questões", "Inglês/Espanhol: Espanhol: acentuação, heterossemânticos e questões", "Quím: questões AOCP"),
+        ("Est: revisão e questões", "Inglês/Espanhol: Espanhol: acentuação, heterossemânticos e questões", "Quím: orgânica II: isomeria, acidez, reações, polímeros e radioatividade"),
         ("Mat: questões mistas de Matemática e Física", "Info: questões", "Quím: questões mistas de Química e Biologia")]
 _PORT = ["Interpretação, tipologia e gêneros textuais", "Classes de palavras I", "Classes de palavras II", "Funções do QUE e do SE",
          "Termos da oração", "Coordenação e subordinação", "Pontuação", "Concordância", "Regência e crase", "Colocação pronominal",
@@ -1990,6 +1990,31 @@ def ajuste_titulos_2026_11_21(conn):
     if n:
         avisar(f"Cronograma ajustado ao edital: {n} bloco(s) de Constitucional mudaram de título "
                "(os princípios fundamentais, arts. 1º a 4º, não são cobrados para 2º Tenente).", "info")
+
+def ajuste_quimica_2026_11_24(conn):
+    """NOVO (24/11/2026): blocos de Química reorganizados.
+    Petróleo e combustíveis vão para o bloco de fogo; a orgânica é dividida em dois blocos
+    (o bloco "questões AOCP" de Química vira "orgânica II"). Só troca o nome; o progresso do bloco é mantido."""
+    chave = "ajuste_quimica_2026_11_24"
+    est = nuvem_estado()
+    if get_config(chave, "") or (est["ativa"] and est["status"] != "ok"):
+        return
+    n = 0
+    for materia, antigo, novo in edital_cfo.RENOMEAR_2026_11_24:
+        linhas = conn.execute("""SELECT t.id, t.nome FROM topicos t JOIN materias m ON t.materia_id = m.id
+                                 WHERE m.nome = ?""", (materia,)).fetchall()
+        for tid, nome in linhas:
+            assunto = topico_sem_prefixo(nome)
+            if assunto == antigo or assunto.startswith(antigo + " ("):
+                prefixo = nome[: len(nome) - len(assunto)]
+                conn.execute("UPDATE topicos SET nome = ? WHERE id = ?", (prefixo + novo + assunto[len(antigo):], tid))
+                n += 1
+        conn.execute("DELETE FROM orientacoes WHERE materia = ? AND topico = ? AND origem = 'padrao'", (materia, antigo))
+    conn.commit()
+    set_config(chave, f"feito ({n} blocos)")
+    if n:
+        avisar("Química reorganizada: petróleo e combustíveis entraram no bloco de fogo, e a orgânica foi dividida "
+               "em dois blocos. O bloco de fogo já tem o link da apostila.", "info")
 
 def recomeco_automatico_20_10(conn):
     """Pedido em 20/10/2026: recomeçar o cronograma CFO a partir de 20/10. Roda uma vez só."""
@@ -3617,6 +3642,7 @@ recomeco_automatico_20_10(conn)
 ajuste_titulos_2026_10_22(conn)
 ajuste_progresso_2026_11_01(conn)
 ajuste_titulos_2026_11_21(conn)
+ajuste_quimica_2026_11_24(conn)
 for (_mid_esc,) in conn.execute("SELECT id FROM metas WHERE ativa = 1").fetchall():
     reorganizar_automatico(conn, _mid_esc)
 mostrar_avisos()  # mostra já os avisos dos ajustes automáticos acima

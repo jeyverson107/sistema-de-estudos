@@ -745,8 +745,8 @@
   },
   {
    "materia": "Química",
-   "topico": "fogo e combustão",
-   "texto": "**Aspectos químicos do fogo e da combustão (item 5 do edital).**\n- Triângulo e tetraedro do fogo; pontos de fulgor, de combustão e de ignição.\n- Combustão completa × incompleta; reação de combustão de hidrocarboneto e balanceamento; calor de combustão.\n- Extinção pelo lado químico: retirar combustível, comburente ou calor, ou interromper a reação em cadeia."
+   "topico": "fogo, combustão, petróleo e combustíveis",
+   "texto": "📄 **Apostila (estude por ela):** [Química 1 — Fogo, combustão, petróleo e combustíveis (PDF)](https://jeyverson107.github.io/sistema-de-estudos/quimica/Quimica_01_Fogo_Combustao_Combustiveis.pdf)\n\n**Aspectos químicos do fogo e da combustão (item 5) + petróleo e combustíveis (item 4.1 do edital).**\n- Combustão como oxirredução; triângulo e tetraedro do fogo; pontos de fulgor, de combustão e de ignição; limites de inflamabilidade (LII/LSI); densidade dos gases (GLP × gás natural).\n- Combustão completa × incompleta, balanceamento, estequiometria; calor de combustão e poder calorífico; gases tóxicos (CO, HCN, HCl).\n- Métodos de extinção e química dos agentes (água, espuma, CO₂, pó químico, agente úmido); classes A, B, C, D e K.\n- Petróleo: destilação fracionada, craqueamento, frações, GLP, gás natural, gasolina E30, octanagem.\n- Divisão: 40 min de apostila (seções 1 a 9) + 50 min nos 22 exercícios da própria apostila (gabarito no final).\n- 📖 **Depois do bloco (cerca de 30 min):** livro Moderna Plus, Cap. 13, itens 3 e 4 (p. 240–246; no PDF, p. 242–248). Fogo e extintores não estão no livro: a apostila basta."
   },
   {
    "materia": "Química",
@@ -761,7 +761,7 @@
   {
    "materia": "Química",
    "topico": "gases, soluções, estequiometria e água",
-   "texto": "**Soluções e estequiometria (itens 1.7, 1.8 e 2.1 do edital).**\n- Estados da matéria, volume molar e gás ideal.\n- Concentração (g/L e mol/L), fração molar, diluição e mistura de soluções.\n- Classificação das reações, balanceamento, cálculos estequiométricos e rendimento.\n- Água: propriedades e tratamento para consumo (item 6).\n- Também no item 1.8: coeficiente de solubilidade; solventes polares × apolares; soluções iônicas × moleculares; unidades de concentração e preparo de soluções.\n- Divisão: 30 min de teoria + 60 min de exercícios."
+   "texto": "**Soluções e estequiometria (itens 1.7, 1.8 e 2.1 do edital).**\n- Estados da matéria e mudanças de estado (fusão, vaporização, condensação, solidificação, sublimação); volume molar e gás ideal; princípio de Avogadro (volumes iguais de gases, na mesma temperatura e pressão, têm o mesmo número de moléculas).\n- Concentração (g/L e mol/L), fração molar, diluição e mistura de soluções.\n- Classificação das reações, balanceamento, cálculos estequiométricos e rendimento.\n- Água: propriedades e tratamento para consumo (item 6).\n- Também no item 1.8: coeficiente de solubilidade; solventes polares × apolares; soluções iônicas × moleculares; unidades de concentração e preparo de soluções.\n- Divisão: 30 min de teoria + 60 min de exercícios."
   },
   {
    "materia": "Química",
@@ -775,13 +775,13 @@
   },
   {
    "materia": "Química",
-   "topico": "radioatividade, orgânica e química aplicada",
-   "texto": "**Radioatividade (item 1.9) + orgânica e química aplicada (itens 3 e 4 do edital).**\n- Emissões alfa e beta (leis da radioatividade), meia-vida, fissão e fusão, riscos e proteção radiológica.\n- Orgânica, em visão geral: cadeias carbônicas, funções orgânicas, nomenclatura IUPAC, isomeria plana e espacial, tipos de reação.\n- Petróleo e combustíveis; polímeros (PVC, polietileno, borracha sintética).\n- Itens do edital que entram aqui: radioatividade natural × artificial; ligação química em compostos orgânicos (3.3); acidez e basicidade orgânicas, com ordem de caráter ácido (3.4); tipos de reações e solventes orgânicos (3.5); funções nitrogenadas, halogenadas, organometálicas e sulfuradas (3.1); polímeros acrílicos (4.3).\n- ⚠️ Bloco denso. Se não couber, toque em ⏳ Fiz parte e anote em 📍 onde parou: o app reagenda o resto.\n- Divisão: 40 min de teoria + 50 min de exercícios."
+   "topico": "orgânica I: carbono, cadeias, funções e nomenclatura",
+   "texto": "**Química orgânica I (itens 3.1, 3.2 e 3.3 do edital).**\n- Características do carbono (tetravalência, hibridização sp³/sp²/sp), classificação das cadeias e ligação química em compostos orgânicos (3.3).\n- Funções orgânicas e fórmulas gerais: hidrocarbonetos, álcoois, fenóis, aldeídos, cetonas, ácidos carboxílicos e derivados, éteres, ésteres, nitrogenadas, halogenadas, sulfuradas e organometálicos.\n- Nomenclatura IUPAC e usual.\n- Livro: Cap. 5 (p. 95–111) e Cap. 20 (p. 346–366); tabela IUPAC na p. 448.\n- Divisão: 40 min de teoria + 50 min de exercícios."
   },
   {
    "materia": "Química",
-   "topico": "questões AOCP",
-   "texto": "**Revisão de Química por questões.**\n- 1h10 de questões priorizando soluções, estequiometria e combustão.\n- 20 min no caderno de erros."
+   "topico": "orgânica II: isomeria, acidez, reações, polímeros e radioatividade",
+   "texto": "**Química orgânica II + radioatividade (itens 3.2, 3.4, 3.5, 4.3 e 1.9 do edital).**\n- Isomeria plana e espacial (geométrica e óptica).\n- Acidez e basicidade orgânicas: ordem do caráter ácido (ácido carboxílico > fenol > água > álcool) e das aminas (3.4).\n- Tipos de reações orgânicas (substituição, adição, eliminação, oxidação, combustão) e solventes orgânicos (3.5). Não estão no livro: use a apostila.\n- Polímeros vinílicos (PVC, polietileno), acrílicos e diênicos (borracha sintética); propriedades (4.3).\n- Radioatividade: emissões alfa, beta e gama, leis da radioatividade, meia-vida, fissão e fusão, riscos e proteção radiológica (1.9).\n- Livro: Cap. 21 (isomeria, p. 367–382), Cap. 5 item 6 (polímeros, p. 108) e Cap. 23 (radioatividade, p. 402–423).\n- ⚠️ Bloco denso. Se não couber, toque em ⏳ Fiz parte e anote em 📍 onde parou: o app reagenda o resto.\n- Divisão: 40 min de teoria + 50 min de exercícios."
   },
   {
    "materia": "Química",

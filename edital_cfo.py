@@ -144,13 +144,14 @@ BLOCOS = {
     (FIS, "eletrostática, eletrodinâmica e magnetismo"): ["FIS5"],
     (FIS, "óptica e ondas"): ["FIS6"],
 
-    (QUI, "fogo e combustão"): ["QUI25"],
+    (QUI, "fogo, combustão, petróleo e combustíveis"): ["QUI25", "QUI21"],
     (QUI, "misturas, átomo e tabela periódica"): ["QUI1", "QUI2", "QUI3"],
     (QUI, "ligações e funções inorgânicas"): ["QUI4", "QUI5", "QUI6"],
     (QUI, "gases, soluções, estequiometria e água"): ["QUI7", "QUI8", "QUI10", "QUI26"],
     (QUI, "produtos perigosos, oxirredução e siderurgia"): ["QUI24", "QUI15", "QUI23"],
     (QUI, "termoquímica, cinética, equilíbrio e pH"): ["QUI11", "QUI12", "QUI13", "QUI14"],
-    (QUI, "radioatividade, orgânica e química aplicada"): ["QUI9", "QUI16", "QUI17", "QUI18", "QUI19", "QUI20", "QUI21", "QUI22"],
+    (QUI, "orgânica I: carbono, cadeias, funções e nomenclatura"): ["QUI16", "QUI17", "QUI18"],
+    (QUI, "orgânica II: isomeria, acidez, reações, polímeros e radioatividade"): ["QUI9", "QUI17", "QUI19", "QUI20", "QUI22"],
 
     (BIO, "citologia e metabolismo"): ["BIO1"], (BIO, "genética e biotecnologia"): ["BIO1"],
     (BIO, "evolução, classificação, embriologia e fisiologia humana"): ["BIO2"],
@@ -222,6 +223,13 @@ BLOCOS = {
 # Títulos de blocos trocados em 21/11/2026 (matéria, antigo, novo)
 RENOMEAR_2026_11_21 = [
     (CF, "Eficácia das normas; princípios fundamentais", "Eficácia e aplicabilidade das normas constitucionais"),
+]
+
+# Blocos de Química reorganizados em 24/11/2026 (matéria, antigo, novo)
+RENOMEAR_2026_11_24 = [
+    (QUI, "fogo e combustão", "fogo, combustão, petróleo e combustíveis"),
+    (QUI, "radioatividade, orgânica e química aplicada", "orgânica I: carbono, cadeias, funções e nomenclatura"),
+    (QUI, "questões AOCP", "orgânica II: isomeria, acidez, reações, polímeros e radioatividade"),
 ]
 
 

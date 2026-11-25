@@ -5417,48 +5417,53 @@ def _pg_estudados():
     if df.empty:
         st.info("Você ainda não marcou nenhum bloco como concluído ou feito em parte.")
         return
-    c1, c2 = st.columns([1, 1])
-    materias = ["Todas"] + sorted(df["materia"].unique().tolist())
-    mat = c1.selectbox("Matéria", materias, key="est_mat")
-    busca = c2.text_input("Procurar no assunto", key="est_busca", placeholder="ex.: peculato, art. 9º")
-    if mat != "Todas":
-        df = df[df["materia"] == mat]
+    # NOVO (25/11/2026): uma sub-aba por matéria
+    busca = st.text_input("Procurar no assunto (vale para todas as matérias)", key="est_busca",
+                          placeholder="ex.: peculato, art. 9º")
+    so_apost = st.toggle("Mostrar só os que têm apostila", key="est_apost")
     if busca.strip():
         df = df[df["nome"].str.contains(busca.strip(), case=False, regex=False)]
-    so_apost = st.toggle("Mostrar só os que têm apostila", key="est_apost")
-    linhas = []
+    linhas = {}
     for _, row in df.iterrows():
         ori = buscar_orientacao(conn, row['materia'], row['nome']) or ""
         if so_apost and "Apostila" not in ori:
             continue
-        linhas.append((row, ori))
-    st.caption(f"{len(linhas)} bloco(s). Os mais recentes aparecem primeiro.")
-    for row, ori in linhas[:150]:
-        icone = "✅" if row['status'] == "Concluído" else "⏳"
-        nome = str(row['nome'])
-        data_txt = nome.split(' · ', 1)[0] if ' · ' in nome else ""
-        conteudo = nome.split(' · ', 1)[-1]
-        tem_ap = " 📄" if "Apostila" in ori else ""
-        with st.expander(f"{icone}{tem_ap} **{row['materia']}** · {conteudo[:80]}" + (f" ({data_txt})" if data_txt else "")):
-            st.markdown(f"**Conteúdo:** {conteudo}")
-            st.caption(f"{row['bloco']} · estudado: {int(row['minutos_estudados'] or 0)} de "
-                       f"{int(row['minutos_planejados'] or 0)} min · {row['status']}")
-            if ori:
-                st.info("📌 **Orientação**\n\n" + ori)
-            else:
-                st.caption("Este bloco não tem orientação cadastrada.")
-            reg = conn.execute("SELECT estudado FROM topicos WHERE id = ?", (int(row['id']),)).fetchone()
-            estudado = ((reg[0] if reg else "") or "").strip()
-            if estudado:
-                st.markdown("**📝 O que você anotou que estudou:**")
-                st.write(estudado)
-            if row['materia'] != RED:
-                n_q = st.select_slider("Questões do caderno", options=[10, 20, 30, 40, 50], value=40,
-                                       key=f"est_n_{row['id']}")
-                ped = texto_pedido_caderno(row, ori, row['anotacao'] or "", n_q, estudado)
-                botao_copiar(ped, f"est_cad_{row['id']}", "📋 Copiar pedido do caderno")
-    if len(linhas) > 150:
-        st.caption("Mostrando os 150 mais recentes. Use o filtro de matéria ou a busca para achar os outros.")
+        linhas.setdefault(row['materia'], []).append((row, ori))
+    if not linhas:
+        st.info("Nenhum bloco encontrado com esses filtros.")
+        return
+    materias = sorted(linhas)
+    st.caption("Toque no nome da matéria para ver os blocos dela. Arraste as abas para o lado se não couberem na tela.")
+    for aba, mat in zip(st.tabs([f"{m} ({len(linhas[m])})" for m in materias]), materias):
+        with aba:
+            itens = linhas[mat]
+            st.caption(f"{len(itens)} bloco(s) de {mat}. Os mais recentes aparecem primeiro.")
+            for row, ori in itens[:100]:
+                icone = "✅" if row['status'] == "Concluído" else "⏳"
+                nome = str(row['nome'])
+                data_txt = nome.split(' · ', 1)[0] if ' · ' in nome else ""
+                conteudo = nome.split(' · ', 1)[-1]
+                tem_ap = " 📄" if "Apostila" in ori else ""
+                with st.expander(f"{icone}{tem_ap} {conteudo[:90]}" + (f" ({data_txt})" if data_txt else "")):
+                    st.markdown(f"**Conteúdo:** {conteudo}")
+                    st.caption(f"{row['bloco']} · estudado: {int(row['minutos_estudados'] or 0)} de "
+                               f"{int(row['minutos_planejados'] or 0)} min · {row['status']}")
+                    if ori:
+                        st.info("📌 **Orientação**\n\n" + ori)
+                    else:
+                        st.caption("Este bloco não tem orientação cadastrada.")
+                    reg = conn.execute("SELECT estudado FROM topicos WHERE id = ?", (int(row['id']),)).fetchone()
+                    estudado = ((reg[0] if reg else "") or "").strip()
+                    if estudado:
+                        st.markdown("**📝 O que você anotou que estudou:**")
+                        st.write(estudado)
+                    if row['materia'] != RED:
+                        n_q = st.select_slider("Questões do caderno", options=[10, 20, 30, 40, 50], value=40,
+                                               key=f"est_n_{row['id']}")
+                        ped = texto_pedido_caderno(row, ori, row['anotacao'] or "", n_q, estudado)
+                        botao_copiar(ped, f"est_cad_{row['id']}", "📋 Copiar pedido do caderno")
+            if len(itens) > 100:
+                st.caption("Mostrando os 100 mais recentes desta matéria. Use a busca para achar os outros.")
 
 if menu == "📅 Hoje":
     _pg_hoje()

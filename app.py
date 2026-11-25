@@ -3547,6 +3547,7 @@ menu = st.sidebar.radio("Navegação", [
     "🏁 Simulados",
     "✍️ Redações",
     "📊 Desempenho",
+    "📚 Já estudados",
     "⚙️ Gerenciador"
 ])
 if _usuario():
@@ -5390,6 +5391,75 @@ def _pg_avanco_edital():
                                           f"{nome.split(' · ', 1)[-1]}" + (f" ({nome[:13]})" if ' · ' in nome else "")
                                           for nome, stt in l["blocos"]))
 
+
+# =============================================================================
+# NOVO (25/11/2026): 📚 JÁ ESTUDADOS — consulta dos blocos concluídos/parciais
+# (orientação, apostila e pedido do caderno), sem mexer no progresso.
+# =============================================================================
+def _pg_estudados():
+    st.header("📚 Já estudados")
+    st.caption("Blocos que você já marcou como concluídos (ou feitos em parte). Aqui você consulta a orientação, "
+               "abre a apostila e copia o pedido do caderno de questões. Nada aqui altera o seu progresso.")
+    df_metas = pd.read_sql_query("SELECT id, nome FROM metas WHERE ativa = 1", conn)
+    metas_crono = [r for _, r in df_metas.iterrows() if meta_tem_cronograma(r['id'], conn)]
+    if not metas_crono:
+        st.info("Nenhum cronograma carregado ainda.")
+        return
+    nomes = [r['nome'] for r in metas_crono]
+    meta_sel = escolher_objetivo(nomes, "Objetivo:", "obj_estudados")
+    meta_id = int([r['id'] for r in metas_crono if r['nome'] == meta_sel][0])
+    df = pd.read_sql_query("""
+        SELECT t.id, t.nome, t.bloco, t.minutos_planejados, t.minutos_estudados, t.status, t.anotacao,
+               t.semana, t.dia, t.ordem, m.nome AS materia
+        FROM topicos t JOIN materias m ON t.materia_id = m.id
+        WHERE m.meta_id = ? AND t.status IN ('Concluído', 'Parcial')
+        ORDER BY t.semana DESC, t.dia DESC, t.ordem DESC""", conn, params=(meta_id,))
+    if df.empty:
+        st.info("Você ainda não marcou nenhum bloco como concluído ou feito em parte.")
+        return
+    c1, c2 = st.columns([1, 1])
+    materias = ["Todas"] + sorted(df["materia"].unique().tolist())
+    mat = c1.selectbox("Matéria", materias, key="est_mat")
+    busca = c2.text_input("Procurar no assunto", key="est_busca", placeholder="ex.: peculato, art. 9º")
+    if mat != "Todas":
+        df = df[df["materia"] == mat]
+    if busca.strip():
+        df = df[df["nome"].str.contains(busca.strip(), case=False, regex=False)]
+    so_apost = st.toggle("Mostrar só os que têm apostila", key="est_apost")
+    linhas = []
+    for _, row in df.iterrows():
+        ori = buscar_orientacao(conn, row['materia'], row['nome']) or ""
+        if so_apost and "Apostila" not in ori:
+            continue
+        linhas.append((row, ori))
+    st.caption(f"{len(linhas)} bloco(s). Os mais recentes aparecem primeiro.")
+    for row, ori in linhas[:150]:
+        icone = "✅" if row['status'] == "Concluído" else "⏳"
+        nome = str(row['nome'])
+        data_txt = nome.split(' · ', 1)[0] if ' · ' in nome else ""
+        conteudo = nome.split(' · ', 1)[-1]
+        tem_ap = " 📄" if "Apostila" in ori else ""
+        with st.expander(f"{icone}{tem_ap} **{row['materia']}** · {conteudo[:80]}" + (f" ({data_txt})" if data_txt else "")):
+            st.markdown(f"**Conteúdo:** {conteudo}")
+            st.caption(f"{row['bloco']} · estudado: {int(row['minutos_estudados'] or 0)} de "
+                       f"{int(row['minutos_planejados'] or 0)} min · {row['status']}")
+            if ori:
+                st.info("📌 **Orientação**\n\n" + ori)
+            else:
+                st.caption("Este bloco não tem orientação cadastrada.")
+            reg = conn.execute("SELECT estudado FROM topicos WHERE id = ?", (int(row['id']),)).fetchone()
+            estudado = ((reg[0] if reg else "") or "").strip()
+            if estudado:
+                st.markdown("**📝 O que você anotou que estudou:**")
+                st.write(estudado)
+            if row['materia'] != RED:
+                n_q = st.select_slider("Questões do caderno", options=[10, 20, 30, 40, 50], value=40,
+                                       key=f"est_n_{row['id']}")
+                ped = texto_pedido_caderno(row, ori, row['anotacao'] or "", n_q, estudado)
+                botao_copiar(ped, f"est_cad_{row['id']}", "📋 Copiar pedido do caderno")
+    if len(linhas) > 150:
+        st.caption("Mostrando os 150 mais recentes. Use o filtro de matéria ou a busca para achar os outros.")
+
 if menu == "📅 Hoje":
     _pg_hoje()
 elif menu == "🗓️ Cronograma":
@@ -5416,6 +5486,8 @@ elif menu == "📊 Desempenho":
         _pg_analise()
     with _aba_rv:
         _pg_revisao()
+elif menu == "📚 Já estudados":
+    _pg_estudados()
 elif menu == "⚙️ Gerenciador":
     st.header("⚙️ Gerenciador")
     _sec = st.radio("Seção", ["🛠️ Ferramentas e dados", "🧭 Planejar concurso novo"], horizontal=True,
